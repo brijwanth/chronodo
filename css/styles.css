@@ -1,17 +1,17 @@
 /* ===== Tokens ===== */
 :root {
   --color-bg: #ffffff;
-  --color-bg-alt: #f4f4f4;
+  --color-bg-alt: #f4f5f7;
   --color-wood-line: rgba(0,0,0,0.04);
   --color-card: #ffffff;
-  --color-card-alt: #f2f2f2;
-  --color-ink: #0a0a0a;
-  --color-ink-soft: #333333;
-  --color-cream: #0a0a0a;
-  --color-brass: #1f9e8b;
-  --color-brass-dark: #137a6a;
-  --color-sage: #74855f;
-  --color-sage-dark: #566446;
+  --color-card-alt: #eef0f3;
+  --color-ink: #2a2f36;
+  --color-ink-soft: #737b85;
+  --color-cream: #2a2f36;
+  --color-brass: #067647;
+  --color-brass-dark: #d5dae0;
+  --color-sage: #0e9f6e;
+  --color-sage-dark: #067647;
   --color-rust: #a8432d;
   --color-rust-dark: #7e3220;
 
@@ -161,8 +161,8 @@ button { font-family: inherit; }
   bottom: calc(24px + env(safe-area-inset-bottom, 0));
   width: 56px; height: 56px;
   border-radius: 50%;
-  background: #99dfff;
-  color: var(--color-cream);
+  background: #0e9f6e;
+  color: #ffffff;
   border: none;
   font-size: 28px;
   line-height: 1;
@@ -179,38 +179,30 @@ button { font-family: inherit; }
    bring a card to the pointer; its face reads flat to the right. */
 .watch-stage {
   position: relative;
-  height: 400px;
+  height: 440px;
   margin: 8px 0 10px;
   overflow: hidden;
-  --dial-cx: -240px;      /* dial centre, off the left edge */
-  --dial-size: 560px;
-  --dial-r: 200px;        /* radius the labels ride on */
+  --dial-cx: -260px;      /* dial centre, off the left edge */
+  --dial-w: 520px;
+  --dial-h: 620px;        /* taller than wide — elongated */
+  --dial-rx: 175px;       /* horizontal radius the labels ride on */
+  --dial-ry: 205px;       /* vertical radius */
   touch-action: none;
 }
 .watch-dial {
   position: absolute;
   left: var(--dial-cx);
   top: 50%;
-  width: var(--dial-size);
-  height: var(--dial-size);
+  width: var(--dial-w);
+  height: var(--dial-h);
   transform: translateY(-50%);
-  border-radius: 50%;
+  border-radius: 160px;
   border: 2px solid var(--color-brass-dark);
   background:
-    radial-gradient(circle at 50% 50%, #ffffff 0%, #f0f0f0 62%, #e6e6e6 100%);
+    radial-gradient(120% 90% at 50% 50%, #ffffff 0%, #f0f0f0 62%, #e6e6e6 100%);
   box-shadow: inset 0 0 40px rgba(0,0,0,0.08), 0 0 0 6px #f4f4f4, 0 12px 34px rgba(0,0,0,0.12);
 }
-.watch-dial__ticks {
-  position: absolute;
-  inset: 14px;
-  border-radius: 50%;
-  background:
-    repeating-conic-gradient(from 0deg,
-      var(--color-brass-dark) 0deg 0.5deg, transparent 0.5deg 6deg);
-  -webkit-mask: radial-gradient(circle, transparent 0 90%, #000 90.5% 100%);
-          mask: radial-gradient(circle, transparent 0 90%, #000 90.5% 100%);
-  opacity: 0.6;
-}
+.watch-dial__ticks { display: none; }
 .watch-dial__rotor {
   position: absolute;
   inset: 0;
@@ -237,7 +229,7 @@ button { font-family: inherit; }
   border: none;
   padding: 0;
   cursor: pointer;
-  white-space: nowrap;
+  white-space: normal;
   color: var(--color-ink);
   font-family: var(--font-display);
   font-size: 15px;
@@ -254,9 +246,15 @@ button { font-family: inherit; }
   flex: 0 0 auto;
 }
 .watch-label__txt {
-  max-width: 190px;
+  width: 150px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-align: right;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 .watch-label.is-current {
   color: var(--color-brass);
@@ -267,13 +265,13 @@ button { font-family: inherit; }
 /* the fixed pointer at 3 o'clock — the read-off mark */
 .watch-pointer {
   position: absolute;
-  left: calc(var(--dial-cx) + var(--dial-size) / 2 + var(--dial-r) - 6px);
+  left: 187px;
   top: 50%;
   width: 0; height: 0;
   transform: translateY(-50%);
-  border-top: 9px solid transparent;
-  border-bottom: 9px solid transparent;
-  border-left: 14px solid var(--color-rust);
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 16px solid #0e9f6e;
   filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
   z-index: 4;
 }
@@ -315,7 +313,7 @@ button { font-family: inherit; }
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--color-brass-dark);
+  color: #067647;
 }
 
 .card {
@@ -356,8 +354,8 @@ button { font-family: inherit; }
   white-space: nowrap;
 }
 .tag-chip.is-goal {
-  background: #66cfff;
-  color: var(--color-cream);
+  background: #0e9f6e;
+  color: #ffffff;
 }
 .card__streak { display: flex; gap: 6px; margin: 14px 0 6px; }
 .dot {
@@ -368,8 +366,8 @@ button { font-family: inherit; }
   position: relative;
 }
 .dot.is-done {
-  background: #4bb8ea;
-  border-color: #6cc8f0;
+  background: #0e9f6e;
+  border-color: #067647;
 }
 .card__stats {
   margin-top: auto;
@@ -392,12 +390,12 @@ button { font-family: inherit; }
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.btn--stamp { background: #99dfff; color: var(--color-cream); }
+.btn--stamp { background: #0e9f6e; color: #ffffff; }
 .btn--stamp.is-done { background: var(--color-sage); }
 .btn--ghost { background: transparent; border: 1.5px solid var(--color-ink); color: var(--color-ink); }
 .btn--text { background: none; color: var(--color-ink-soft); text-decoration: underline; text-transform: none; margin-left: auto; }
 .btn--sm { padding: 6px 9px; font-size: 10.5px; }
-.btn--primary { background: #99dfff; color: var(--color-cream); }
+.btn--primary { background: #0e9f6e; color: #ffffff; }
 .btn--full { width: 100%; }
 
 /* Ghost buttons default to ink-on-cream (for use on cards), but everything
@@ -429,7 +427,9 @@ button { font-family: inherit; }
 .rolodex-filterbar {
   display: flex;
   gap: 6px;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  max-height: 108px;
+  overflow-y: auto;
   padding-bottom: 4px;
   margin-bottom: 4px;
   scrollbar-width: none;
@@ -449,7 +449,7 @@ button { font-family: inherit; }
   opacity: 0.7;
   white-space: nowrap;
 }
-.filter-pill.is-active { background: #B3B3B3; color: var(--color-ink); opacity: 1; font-weight: 700; }
+.filter-pill.is-active { background: #dcfae9; border-color: #0e9f6e; color: #2a2f36; opacity: 1; font-weight: 700; }
 
 /* ===== List view ===== */
 .list { display: flex; flex-direction: column; gap: 10px; }
@@ -470,7 +470,7 @@ button { font-family: inherit; }
   flex: 0 0 auto;
   cursor: pointer;
 }
-.row__stamp.is-done { background: #99dfff; border-color: #6cc8f0; }
+.row__stamp.is-done { background: #0e9f6e; border-color: #067647; }
 .row__body { flex: 1; min-width: 0; cursor: pointer; }
 .row__title { font-family: var(--font-display); font-weight: 600; font-size: 15.5px; }
 .row__tags { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
@@ -596,8 +596,8 @@ button { font-family: inherit; }
 }
 .cal-cell.is-empty { visibility: hidden; }
 .cal-cell.is-done {
-  background: #99dfff;
-  border-color: #6cc8f0;
+  background: #0e9f6e;
+  border-color: #067647;
   color: var(--color-cream);
   font-weight: 700;
   box-shadow: inset 0 0 0 2px rgba(244,234,210,0.35);
@@ -741,7 +741,7 @@ button { font-family: inherit; }
 .detail-streak__label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
 .detail-streak__dots { display: flex; gap: 5px; }
 .detail-streak__dots .dot { width: 13px; height: 13px; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.18); }
-.detail-streak__dots .dot.is-done { background: var(--color-rust); border-color: var(--color-rust-dark); }
+.detail-streak__dots .dot.is-done { background: #0e9f6e; border-color: #067647; }
 
 .detail-options { margin-top: 18px; }
 .task-note { margin: 14px 0 4px; }
@@ -817,7 +817,7 @@ button { font-family: inherit; }
 .calview__cell.is-today .calview__daynum { color: var(--color-brass-dark); }
 .calview__cell.is-selected { box-shadow: 0 0 0 2px var(--color-brass), 0 2px 5px rgba(0,0,0,0.12); }
 .calview__dots { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
-.calview__dot { width: 5px; height: 5px; border-radius: 50%; background: #4bb8ea; }
+.calview__dot { width: 5px; height: 5px; border-radius: 50%; background: #0e9f6e; }
 
 .calview__day { margin-top: 20px; }
 .calview__day-head {
@@ -846,7 +846,7 @@ button { font-family: inherit; }
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0,0,0,0.14);
 }
-.calview__done-dot { width: 12px; height: 12px; border-radius: 50%; background: #4bb8ea; flex: 0 0 auto; }
+.calview__done-dot { width: 12px; height: 12px; border-radius: 50%; background: #0e9f6e; flex: 0 0 auto; }
 .calview__done-name { flex: 1; min-width: 0; font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calview__done-meta { flex: 0 0 auto; font-size: 11px; color: var(--color-ink-soft); text-transform: uppercase; letter-spacing: 0.03em; }
 

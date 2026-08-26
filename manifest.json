@@ -1,6 +1,6 @@
 {
-  "name": "Rolodex — Activity Tracker",
-  "short_name": "Rolodex",
+  "name": "Chronodo — Activity Tracker",
+  "short_name": "Chronodo",
   "description": "A card-catalog for your habits — log activities, track consistency, hit your goals.",
   "start_url": "./index.html",
   "id": "./index.html",

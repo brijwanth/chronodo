@@ -77,13 +77,16 @@ function getTags() { return db.tags; }
 function getGoals() { return db.tags.filter(t => t.isGoal); }
 
 // ---- Activities ----
-function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuration = 1500 }) {
+function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuration = 1500,
+                         timesPerWeek = 7, preferredDays = [0, 1, 2, 3, 4, 5, 6] }) {
   const activity = {
     id: uid(),
     name: name.trim(),
     tags,
     timerType,          // 'stopwatch' | 'countdown'
     timerDuration,       // seconds, used for countdown
+    timesPerWeek,        // how many times per week to do it (7 = daily)
+    preferredDays,       // weekday indices 0=Sun..6=Sat
     createdAt: todayStr(),
     logs: {},            // { 'YYYY-MM-DD': { done: true, source: 'manual'|'timer', seconds: number } }
   };
@@ -107,6 +110,13 @@ function deleteActivity(id) {
 
 function getActivities() { return db.activities; }
 function getActivity(id) { return db.activities.find(a => a.id === id); }
+
+// Wipe all cards + tags (used when a new installer imports their own CSV).
+function clearAll() {
+  db.activities = [];
+  db.tags = [];
+  save();
+}
 
 function markDone(activityId, { source = 'manual', seconds = 0, date = todayStr(), note } = {}) {
   const a = getActivity(activityId);
@@ -153,4 +163,5 @@ export {
   createActivity, updateActivity, deleteActivity, getActivities, getActivity,
   markDone, unmarkDone, isDoneOn, setLogNote,
   getSettings, updateSettings,
+  clearAll,
 };

@@ -74,11 +74,32 @@ function topUpDefaults() {
 }
 topUpDefaults();
 
+// second batch of starter cards
+function topUpMore() {
+  if (localStorage.getItem('rolodex-topup-v2')) return;
+  const names = db.getActivities().map(a => a.name);
+  const extra = [
+    { name: 'Read 20 pages', timerType: 'countdown', timerDuration: 1200 },
+    { name: 'Drink water', timerType: 'stopwatch' },
+    { name: 'Stretch', timerType: 'countdown', timerDuration: 300 },
+    { name: 'Journal', timerType: 'stopwatch' },
+    { name: 'Walk 10k steps', timerType: 'stopwatch' },
+    { name: 'Cold shower', timerType: 'countdown', timerDuration: 120 },
+    { name: 'Sketch', timerType: 'countdown', timerDuration: 900 },
+    { name: 'Learn vocabulary', timerType: 'countdown', timerDuration: 600 },
+    { name: 'Call a friend', timerType: 'stopwatch' },
+    { name: 'Plan tomorrow', timerType: 'countdown', timerDuration: 300 },
+  ];
+  extra.forEach(t => { if (!names.includes(t.name)) db.createActivity(t); });
+  localStorage.setItem('rolodex-topup-v2', '1');
+}
+topUpMore();
+
 // ---------------------------------------------------------------- nav menu
 const navPanel = document.getElementById('nav-panel');
 const navScrim = document.getElementById('nav-scrim');
 const btnMenu = document.getElementById('btn-menu');
-const viewLabels = { rolodex: 'Rolodex', list: 'List', calendar: 'Calendar', tags: 'Tags', recommend: 'Suggested' };
+const viewLabels = { rolodex: 'Chronodo', list: 'List', calendar: 'Calendar', tags: 'Tags', recommend: 'Suggested' };
 
 function openMenu() {
   navPanel.classList.add('is-open');
@@ -105,7 +126,7 @@ tabs.forEach(tab => {
     tab.classList.add('is-active'); tab.setAttribute('aria-selected', 'true');
     viewState.view = tab.dataset.view;
     viewState.rolodexIndex = 0;
-    document.getElementById('brand-view').textContent = viewLabels[tab.dataset.view] || 'Rolodex';
+    document.getElementById('brand-view').textContent = viewLabels[tab.dataset.view] || 'Chronodo';
     closeMenu();
     render();
   });
@@ -153,9 +174,15 @@ function renderFilterBar(container) {
 // ---------------------------------------------------------------- watch-dial view
 function renderRolodex() {
   renderFilterBar(mainEl);
-  const acts = filteredActivities();
-  if (acts.length === 0) {
+  const pool = filteredActivities();
+  // On the dial, drop anything already accomplished today — it comes back tomorrow.
+  const acts = pool.filter(a => !db.isDoneOn(a, db.todayStr()));
+  if (pool.length === 0) {
     emptyState('No cards yet', 'Tap the + button to file your first activity in the drawer.');
+    return;
+  }
+  if (acts.length === 0) {
+    emptyState('All done for today', 'Every card here is stamped — they\u2019ll be back on the dial tomorrow.');
     return;
   }
   if (viewState.rolodexIndex >= acts.length) viewState.rolodexIndex = 0;
@@ -182,8 +209,15 @@ function renderRolodex() {
   const rotor = stage.querySelector('.watch-dial__rotor');
   const baseR = -i * step; // 0deg = the 3-o'clock pointer
 
-  // dial geometry in stage px (mirrors the CSS custom properties)
-  const R = 200, CX = 560 / 2, CY = 560 / 2; // dial centre in rotor coords
+  // dial geometry in stage px — a tall superellipse (elongated rounded bracket)
+  const RX = 175, RY = 205, CX = 260, CY = 310, NEXP = 3.4; // mirrors the CSS dial box
+  const superPos = (rad) => {
+    const c = Math.cos(rad), s = Math.sin(rad);
+    return {
+      x: CX + RX * Math.sign(c) * Math.pow(Math.abs(c), 2 / NEXP),
+      y: CY + RY * Math.sign(s) * Math.pow(Math.abs(s), 2 / NEXP),
+    };
+  };
 
   const labels = acts.map((a, idx) => {
     const el = document.createElement('button');
@@ -198,15 +232,17 @@ function renderRolodex() {
 
   function paint(extra) {
     labels.forEach((el, idx) => {
-      let ang = idx * step + baseR + extra;         // degrees, 0 = pointer
+      let off = idx - i;
+      off = ((off % n) + n) % n;
+      if (off > n / 2) off -= n;                     // shortest wrap distance
+      let ang = off * step + extra;                  // degrees, 0 = pointer
       ang = ((ang + 180) % 360 + 360) % 360 - 180;  // -180..180
       const mag = Math.abs(ang);
-      if (mag > 92) { el.style.opacity = '0'; el.style.pointerEvents = 'none'; return; }
+      if (mag > step * 2.6) { el.style.opacity = '0'; el.style.pointerEvents = 'none'; return; }
       const rad = ang * Math.PI / 180;
-      const x = CX + R * Math.cos(rad);
-      const y = CY + R * Math.sin(rad);
-      el.style.left = x + 'px';
-      el.style.top = y + 'px';
+      const p = superPos(rad);
+      el.style.left = p.x + 'px';
+      el.style.top = p.y + 'px';
       el.style.opacity = String(Math.max(0.22, 1 - mag / 110));
       el.style.pointerEvents = 'auto';
       el.classList.toggle('is-current', idx === i && Math.abs(extra) < step / 2);
@@ -534,7 +570,7 @@ function renderTags() {
   addGoalBtn.className = 'btn btn--primary'; addGoalBtn.textContent = '+ New goal';
   addGoalBtn.onclick = () => openTagForm({ isGoal: true });
   const addTagBtn = document.createElement('button');
-  addTagBtn.className = 'btn btn--ghost'; addTagBtn.style.borderColor = '#c39a55'; addTagBtn.style.color = '#f4ead2';
+  addTagBtn.className = 'btn btn--ghost'; addTagBtn.style.borderColor = '#067647'; addTagBtn.style.color = '#067647';
   addTagBtn.textContent = '+ New tag';
   addTagBtn.onclick = () => openTagForm({ isGoal: false });
   addRow.appendChild(addGoalBtn); addRow.appendChild(addTagBtn);
@@ -606,7 +642,7 @@ function renderRecommend() {
     items.forEach(item => {
       const row = document.createElement('div');
       row.className = 'row';
-      row.innerHTML = `<div class="row__stamp" style="border-color:#a8432d"></div>
+      row.innerHTML = `<div class="row__stamp" style="border-color:#067647"></div>
         <div class="row__body"><div class="row__title">${item.activity.name}</div><div class="row__tags"><span class="tag-chip">${describe(item)}</span></div></div>`;
       row.querySelector('.row__stamp').onclick = () => toggleDone(item.activity);
       row.querySelector('.row__stamp').classList.toggle('is-done', db.isDoneOn(item.activity, db.todayStr()));
@@ -891,7 +927,17 @@ function openActivityForm(existing = null) {
           <option value="goal">Goal</option>
         </select>
       </div>
-      <button class="btn btn--ghost" id="f-newtag-add" style="margin-top:8px;border-color:#c39a55;color:#f4ead2;">+ Add</button>
+      <button class="btn btn--ghost" id="f-newtag-add" style="margin-top:8px;border-color:#067647;color:#067647;">+ Add</button>
+    </div>
+    <div class="field">
+      <label>How often?</label>
+      <div class="field-row" style="align-items:center;gap:8px;">
+        <input type="number" id="f-perweek" min="1" max="7" value="${existing ? (existing.timesPerWeek || 7) : 7}" style="max-width:80px;">
+        <span style="font-size:13px;opacity:.75;">times per week</span>
+      </div>
+      <label style="margin-top:10px;font-size:12px;opacity:.7;">Preferred days</label>
+      <div class="chip-toggle-group" id="f-days"></div>
+      <p style="font-size:11px;opacity:.55;margin-top:6px;">Default is daily — all days, 7× a week.</p>
     </div>
     <div class="field">
       <label>Timer type</label>
@@ -931,6 +977,27 @@ function openActivityForm(existing = null) {
       }
       renderTagChips();
 
+      // Frequency: preferred-day chips (default all days = daily)
+      const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+      const selectedDays = new Set(existing && existing.preferredDays ? existing.preferredDays : [0, 1, 2, 3, 4, 5, 6]);
+      const daysWrap = sheet.querySelector('#f-days');
+      function renderDayChips() {
+        daysWrap.innerHTML = '';
+        dayLabels.forEach((lbl, idx) => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'chip-toggle' + (selectedDays.has(idx) ? ' is-on' : '');
+          chip.textContent = lbl;
+          chip.style.minWidth = '34px';
+          chip.onclick = () => {
+            if (selectedDays.has(idx)) selectedDays.delete(idx); else selectedDays.add(idx);
+            renderDayChips();
+          };
+          daysWrap.appendChild(chip);
+        });
+      }
+      renderDayChips();
+
       sheet.querySelector('#f-newtag-add').onclick = () => {
         const nameInput = sheet.querySelector('#f-newtag');
         const name = nameInput.value.trim();
@@ -959,6 +1026,8 @@ function openActivityForm(existing = null) {
           tags: Array.from(selected),
           timerType,
           timerDuration: minutes * 60,
+          timesPerWeek: Math.max(1, Math.min(7, parseInt(sheet.querySelector('#f-perweek').value, 10) || 7)),
+          preferredDays: Array.from(selectedDays).sort((a, b) => a - b),
         };
         if (existing) db.updateActivity(existing.id, payload);
         else db.createActivity(payload);
@@ -1064,7 +1133,12 @@ function openSettings() {
       </label>
       <button class="btn btn--stamp" id="exp-go" style="margin-top:12px;">Export as text</button>
     </div>
-    <p style="font-size:11px;opacity:.55;margin-top:20px;line-height:1.6;">Rolodex stores everything locally on this device. No account, no server.</p>
+    <div class="field" style="margin-top:20px;">
+      <label>Reset data</label>
+      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Delete every card, goal and tag on this device — then import your own CSV to start fresh. Back up first.</p>
+      <button class="btn btn--text" id="s-reset" style="color:#a8432d;">Delete all cards, goals &amp; tags…</button>
+    </div>
+    <p style="font-size:11px;opacity:.55;margin-top:20px;line-height:1.6;">Chronodo stores everything locally on this device. No account, no server.</p>
   `, {
     onMount: (sheet) => {
       sheet.querySelector('.sheet__close').onclick = closeSheet;
@@ -1083,7 +1157,7 @@ function openSettings() {
         reader.onload = () => {
           try {
             const { added, skipped } = importTasksCsv(reader.result);
-            csvStatus.style.color = 'var(--color-brass-dark)';
+            csvStatus.style.color = '#067647';
             csvStatus.textContent = `Imported ${added} task${added===1?'':'s'}${skipped ? `, skipped ${skipped}` : ''}.`;
             render();
             toast(`Imported ${added} task${added===1?'':'s'}`);
@@ -1101,6 +1175,7 @@ function openSettings() {
       sheet.querySelector('#exp-go').onclick = () => {
         exportNotes(sheet.querySelector('#exp-from').value, sheet.querySelector('#exp-to').value, sheet.querySelector('#exp-task').value);
       };
+      sheet.querySelector('#s-reset').onclick = () => showResetWarning();
     }
   });
 }
@@ -1178,7 +1253,7 @@ function openTimer(activity, { onDone } = {}) {
     <div class="timer-overlay__activity">${activity.name}</div>
     <div class="timer-face" id="timer-display">00:00</div>
     <div class="timer-actions">
-      <button class="btn btn--ghost" id="timer-cancel" style="border-color:#f4ead2;color:#f4ead2;">Cancel</button>
+      <button class="btn btn--ghost" id="timer-cancel" style="border-color:#ffffff;color:#ffffff;">Cancel</button>
       <button class="btn btn--stamp" id="timer-stop">Stop &amp; log</button>
     </div>
   `;
@@ -1228,4 +1303,106 @@ function openTimer(activity, { onDone } = {}) {
   };
 }
 
+// Build a CSV of the current tasks (re-importable) — used as a backup before reset.
+function currentTasksCsv() {
+  const esc = (v) => {
+    v = String(v == null ? '' : v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  const rows = ['name,tags,note,timerType,timerMinutes'];
+  db.getActivities().forEach(a => {
+    const tags = activityTagObjs(a).map(t => t.name).join(';');
+    const mins = a.timerType === 'countdown' ? Math.round((a.timerDuration || 0) / 60) : '';
+    rows.push([esc(a.name), esc(tags), esc(a.note || ''), esc(a.timerType || 'stopwatch'), esc(mins)].join(','));
+  });
+  return rows.join('\n') + '\n';
+}
+
+// Destructive reset with a backup-first warning.
+function showResetWarning() {
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-backdrop';
+  overlay.id = 'reset-overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="sheet__head">
+        <h2 class="sheet__title">Delete everything?</h2>
+        <button class="sheet__close" aria-label="Close">&times;</button>
+      </div>
+      <p style="font-size:13.5px;line-height:1.7;color:var(--color-ink-soft);margin:0 0 12px;">This removes <b>all cards, goals and tags</b> and their logs from this device. It can\u2019t be undone.</p>
+      <p style="font-size:13.5px;line-height:1.7;color:var(--color-ink-soft);margin:0 0 16px;">Back up first \u2014 download a CSV of your current tasks so you can re-import them later.</p>
+      <div class="card__actions">
+        <button class="btn btn--primary" id="reset-backup">Back up to CSV</button>
+        <button class="btn btn--text" id="reset-confirm" style="color:#a8432d;">Delete everything</button>
+        <button class="btn btn--ghost" id="reset-cancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('.sheet__close').onclick = close;
+  overlay.querySelector('#reset-cancel').onclick = close;
+  overlay.querySelector('#reset-backup').onclick = () => showTextExport('chronodo-backup.csv', currentTasksCsv());
+  overlay.querySelector('#reset-confirm').onclick = () => {
+    db.clearAll();
+    close();
+    closeSheet();
+    render();
+    toast('All cards, goals & tags deleted');
+  };
+}
+
+// First-run welcome: greets the user and offers to replace the sample cards
+// with their own CSV before they start.
+function showWelcome() {
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-backdrop';
+  overlay.id = 'welcome-overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="sheet__head">
+        <h2 class="sheet__title">Welcome to Chronodo</h2>
+        <button class="sheet__close" aria-label="Close">&times;</button>
+      </div>
+      <p style="font-size:13.5px;line-height:1.7;color:var(--color-ink-soft);margin:0 0 10px;">Chronodo is your dial-driven habit tracker. Spin the dial on the home screen to pick an activity, open it to log time or run a timer, and stamp your day. Everything stays on this device \u2014 no account, no server.</p>
+      <p style="font-size:13.5px;line-height:1.7;color:var(--color-ink-soft);margin:0 0 16px;">We\u2019ve added a few sample cards to get you started. Prefer your own list? Import a CSV now to <b>replace</b> the samples.</p>
+      <input type="file" id="welcome-csv" accept=".csv,text/csv" hidden>
+      <div class="card__actions">
+        <button class="btn btn--primary" id="welcome-import">Import my CSV</button>
+        <button class="btn btn--ghost" id="welcome-sample">View sample</button>
+        <button class="btn btn--text" id="welcome-skip">Keep samples</button>
+      </div>
+      <div id="welcome-status" style="font-size:12px;margin-top:10px;"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const finish = () => { localStorage.setItem('chronodo-welcomed', '1'); overlay.remove(); };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(); });
+  overlay.querySelector('.sheet__close').onclick = finish;
+  overlay.querySelector('#welcome-skip').onclick = finish;
+  overlay.querySelector('#welcome-sample').onclick = () => showTextExport('sample-tasks.csv', SAMPLE_CSV);
+  const csv = overlay.querySelector('#welcome-csv');
+  overlay.querySelector('#welcome-import').onclick = () => csv.click();
+  csv.onchange = () => {
+    const file = csv.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        db.clearAll();
+        const { added, skipped } = importTasksCsv(reader.result);
+        render();
+        toast(`Imported ${added} task${added === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}`);
+        finish();
+      } catch (err) {
+        const st = overlay.querySelector('#welcome-status');
+        st.style.color = '#a8432d';
+        st.textContent = 'Could not read that file. Check the format.';
+      }
+      csv.value = '';
+    };
+    reader.readAsText(file);
+  };
+}
+
 render();
+if (!localStorage.getItem('chronodo-welcomed')) showWelcome();
