@@ -23,7 +23,7 @@ face, ticks and pointer are the `.watch-dial` block in css/styles.css.
 ```
 index.html              app shell
 css/styles.css           all styling (design tokens at the top)
-js/storage.js            data model + localStorage persistence
+js/storage.js            data model + localStorage persistence + backup snapshot
 js/stats.js              streaks, monthly consistency %, recommendations
 js/timer.js              stopwatch/countdown engine
 js/app.js                views, rendering, forms, gestures — the controller
@@ -104,8 +104,23 @@ you use to open it). For the Play Store, you'll submit the `.aab` instead.
 
 ## Notes on the data
 
-- Stored in `localStorage` under the key `rolodex-db-v1` as one JSON blob —
-  survives app restarts and crashes, lost only if the app's storage is
-  cleared or it's uninstalled.
-- No sync between devices. If you want that later (e.g. a simple export/
-  import button, or real cloud sync), that's a separate addition.
+- Stored in `localStorage` under the key `rolodex-db-v1` as one JSON blob,
+  mirrored to a `rolodex-db-v1-shadow` key on every write. If the primary
+  key is ever missing or fails to parse (e.g. a write got interrupted),
+  the app falls back to the shadow copy instead of starting empty.
+- `navigator.storage.persist()` is requested on load, asking the browser
+  not to evict this origin's storage under disk pressure. Best-effort —
+  most browsers only grant it to installed PWAs, which a TWA qualifies as.
+- Saves are debounced by 120ms while the app is in the foreground, but are
+  flushed immediately on `visibilitychange`/`pagehide` (backgrounding, the
+  OS reclaiming the app, etc.) so an edit right before that isn't lost.
+- No automatic sync between devices — the backup below is opt-in.
+
+## Backups
+
+Settings → **Local backup** downloads a full JSON snapshot (every card,
+goal, tag, log and note) and can restore from one — no account or network
+needed, works entirely offline. This is the recommended way to move data to
+a new device or recover from a wipe.
+
+Cloud backup (Google Drive) is planned for a later version.

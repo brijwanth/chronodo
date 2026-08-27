@@ -724,7 +724,7 @@ function showTextExport(filename, text) {
   };
   overlay.querySelector('#tx-download').onclick = () => {
     try {
-      const blob = new Blob([text], { type: filename.endsWith('.csv') ? 'text/csv' : 'text/plain' });
+      const blob = new Blob([text], { type: filename.endsWith('.csv') ? 'text/csv' : filename.endsWith('.json') ? 'application/json' : 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = filename;
@@ -1134,11 +1134,21 @@ function openSettings() {
       <button class="btn btn--stamp" id="exp-go" style="margin-top:12px;">Export as text</button>
     </div>
     <div class="field" style="margin-top:20px;">
+      <label>Local backup</label>
+      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">A full backup — every card, goal, tag, log and note — as a JSON file. Works offline, no account needed.</p>
+      <input type="file" id="s-restore" accept=".json,application/json" hidden>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn--stamp" id="s-backup-download">Download backup</button>
+        <button class="btn btn--ghost" id="s-restore-btn">Restore from file</button>
+      </div>
+      <div id="s-restore-status" style="font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div class="field" style="margin-top:20px;">
       <label>Reset data</label>
       <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Delete every card, goal and tag on this device — then import your own CSV to start fresh. Back up first.</p>
       <button class="btn btn--text" id="s-reset" style="color:#a8432d;">Delete all cards, goals &amp; tags…</button>
     </div>
-    <p style="font-size:11px;opacity:.55;margin-top:20px;line-height:1.6;">Chronodo stores everything locally on this device. No account, no server.</p>
+    <p style="font-size:11px;opacity:.55;margin-top:20px;line-height:1.6;">Chronodo stores everything locally on this device by default. Backups above are optional and never run automatically.</p>
   `, {
     onMount: (sheet) => {
       sheet.querySelector('.sheet__close').onclick = closeSheet;
@@ -1175,6 +1185,37 @@ function openSettings() {
       sheet.querySelector('#exp-go').onclick = () => {
         exportNotes(sheet.querySelector('#exp-from').value, sheet.querySelector('#exp-to').value, sheet.querySelector('#exp-task').value);
       };
+      sheet.querySelector('#s-backup-download').onclick = () => {
+        const json = JSON.stringify(db.exportAll(), null, 2);
+        showTextExport(`chronodo-backup_${db.todayStr()}.json`, json);
+      };
+      const restoreInput = sheet.querySelector('#s-restore');
+      const restoreStatus = sheet.querySelector('#s-restore-status');
+      sheet.querySelector('#s-restore-btn').onclick = () => restoreInput.click();
+      restoreInput.onchange = () => {
+        const file = restoreInput.files[0];
+        if (!file) return;
+        if (!confirm('Restore from this backup? It will replace all cards, tags and settings currently on this device.')) {
+          restoreInput.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            db.importAll(JSON.parse(reader.result));
+            restoreStatus.style.color = '#067647';
+            restoreStatus.textContent = 'Backup restored.';
+            render();
+            toast('Backup restored');
+          } catch (err) {
+            restoreStatus.style.color = '#a8432d';
+            restoreStatus.textContent = 'Could not restore — invalid backup file.';
+          }
+          restoreInput.value = '';
+        };
+        reader.readAsText(file);
+      };
+
       sheet.querySelector('#s-reset').onclick = () => showResetWarning();
     }
   });
