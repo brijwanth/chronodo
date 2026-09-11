@@ -1,6 +1,7 @@
 import * as db from './storage.js';
 import * as stats from './stats.js';
 import * as timer from './timer.js';
+import * as sync from './sync.js';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -23,6 +24,10 @@ let viewState = {
   recoMode: db.getSettings().recommendationPref === 'gaps' ? 'gaps'
            : db.getSettings().recommendationPref === 'untouched' ? 'untouched' : 'balanced',
 };
+
+// Unsubscribe handle for the live team-membership listener (Settings sheet).
+// closeSheet() always tears this down, whichever way a sheet closes.
+let teamUnsub = null;
 
 // ---------------------------------------------------------------- utilities
 function toast(msg) {
@@ -676,6 +681,7 @@ function openSheet(innerHTML, { onMount, fullscreen } = {}) {
 function closeSheet() {
   const el = document.getElementById('active-sheet');
   if (el) el.remove();
+  if (teamUnsub) { teamUnsub(); teamUnsub = null; }
 }
 
 // A standalone overlay that shows generated text with Copy + Download actions.
@@ -1088,6 +1094,93 @@ function openTagForm({ isGoal = false, existing = null } = {}) {
   });
 }
 
+// ---------------------------------------------------------------- team sync panel (Settings)
+// Renders either the create/join buttons or the joined-team info, and keeps
+// membership live via sync.subscribeToTeam while the Settings sheet is open.
+// closeSheet() (above) always tears the listener down, however the sheet closes.
+function mountTeamPanel(container) {
+  function renderJoinedState(info) {
+    container.innerHTML = `
+      <div class="team-code">
+        <div>
+          <div class="team-code__label">Team code</div>
+          <div class="team-code__value">${info.code}</div>
+        </div>
+        <button class="btn btn--sm btn--ghost" id="team-copy" style="border-color:#067647;color:#067647;">Copy</button>
+      </div>
+      <div class="team-status">${info.memberCount == null ? 'Syncing\u2026' : info.memberCount + (info.memberCount === 1 ? ' person synced' : ' people synced')}</div>
+      <button class="btn btn--text" id="team-leave" style="color:#a8432d;margin-top:8px;">Leave team</button>
+    `;
+    container.querySelector('#team-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(info.code); toast('Code copied'); }
+      catch (e) { toast('Could not copy \u2014 code is ' + info.code); }
+    };
+    container.querySelector('#team-leave').onclick = async () => {
+      if (!confirm('Leave this team? You can rejoin later with the code.')) return;
+      await sync.leaveTeam();
+      mountTeamPanel(container);
+    };
+  }
+
+  function renderJoinState() {
+    container.innerHTML = `
+      <div class="field-row">
+        <button class="btn btn--stamp" id="team-create" style="flex:1;">Create a team</button>
+        <button class="btn btn--ghost" id="team-join-btn" style="flex:1;">Join with code</button>
+      </div>
+      <div class="field-row" id="team-join-row" hidden style="margin-top:10px;">
+        <input type="text" id="team-code-input" placeholder="e.g. 7K2P9Q" style="flex:1;background:var(--color-bg);border:1px solid var(--color-brass-dark);color:var(--color-cream);border-radius:7px;padding:10px 11px;font-family:var(--font-mono);font-size:13.5px;text-transform:uppercase;">
+        <button class="btn btn--primary" id="team-join-go">Join</button>
+      </div>
+      <div class="team-status" id="team-status"></div>
+    `;
+    const statusEl = container.querySelector('#team-status');
+    container.querySelector('#team-create').onclick = async (e) => {
+      e.target.disabled = true;
+      statusEl.style.color = '';
+      statusEl.textContent = 'Creating team\u2026';
+      try {
+        await sync.createTeam();
+        toast('Team created');
+        mountTeamPanel(container);
+      } catch (err) {
+        statusEl.style.color = '#a8432d';
+        statusEl.textContent = err.message || 'Could not create a team.';
+        e.target.disabled = false;
+      }
+    };
+    const joinRow = container.querySelector('#team-join-row');
+    container.querySelector('#team-join-btn').onclick = () => {
+      joinRow.hidden = !joinRow.hidden;
+      if (!joinRow.hidden) container.querySelector('#team-code-input').focus();
+    };
+    container.querySelector('#team-join-go').onclick = async () => {
+      const code = container.querySelector('#team-code-input').value;
+      statusEl.style.color = '';
+      statusEl.textContent = 'Joining\u2026';
+      try {
+        await sync.joinTeam(code);
+        toast('Joined team');
+        mountTeamPanel(container);
+      } catch (err) {
+        statusEl.style.color = '#a8432d';
+        statusEl.textContent = err.message || 'Could not join that team.';
+      }
+    };
+  }
+
+  function startLiveUpdates() {
+    if (teamUnsub) { teamUnsub(); teamUnsub = null; }
+    teamUnsub = sync.subscribeToTeam((info) => {
+      if (info) renderJoinedState(info);
+      else renderJoinState();
+    });
+  }
+
+  if (sync.getLocalTeam()) startLiveUpdates();
+  else renderJoinState();
+}
+
 // ---------------------------------------------------------------- settings
 function openSettings() {
   const s = db.getSettings();
@@ -1107,6 +1200,11 @@ function openSettings() {
         <label><input type="radio" name="s-reco" value="gaps" ${s.recommendationPref==='gaps'?'checked':''}> Close gaps</label>
         <label><input type="radio" name="s-reco" value="untouched" ${s.recommendationPref==='untouched'?'checked':''}> Revive dormant</label>
       </div>
+    </div>
+    <div class="field" style="margin-top:20px;">
+      <label>Team sync (beta)</label>
+      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Share select tasks and goals with a small team. Stamps sync in real time.</p>
+      <div id="team-panel"></div>
     </div>
     <div class="field" style="margin-top:20px;">
       <label>Import tasks from CSV</label>
@@ -1156,6 +1254,7 @@ function openSettings() {
       sheet.querySelectorAll('input[name="s-reco"]').forEach(r => {
         r.onchange = () => { db.updateSettings({ recommendationPref: r.value }); viewState.recoMode = r.value; };
       });
+      mountTeamPanel(sheet.querySelector('#team-panel'));
       const csvInput = sheet.querySelector('#s-csv');
       const csvStatus = sheet.querySelector('#s-csv-status');
       sheet.querySelector('#s-csv-btn').onclick = () => csvInput.click();
