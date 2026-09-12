@@ -931,3 +931,19 @@ button { font-family: inherit; }
 .rolo-card--current .card__streak,
 .rolo-card--current .card__stats { display: none !important; }
 .rolo-card--current .card__actions { margin-top: 12px; }
+
+/* ===== Team sync (Settings) ===== */
+.team-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--color-bg);
+  border: 1px solid var(--color-brass-dark);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.team-code__label { font-size: 11px; opacity: 0.6; }
+.team-code__value { font-size: 16px; font-weight: 800; letter-spacing: 0.05em; }
+.team-status { font-size: 12px; margin-top: 8px; }
+.tag-chip.is-team { background: var(--color-brass-dark); color: var(--color-ink); font-weight: 700; }
