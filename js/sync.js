@@ -5,8 +5,8 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js';
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc,
-  onSnapshot, arrayUnion, arrayRemove, serverTimestamp,
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField,
+  collection, addDoc, onSnapshot, arrayUnion, arrayRemove, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js';
 
 // Not a secret — Firebase's web config is meant to be public in client code.
@@ -132,4 +132,85 @@ function subscribeToTeam(callback) {
   });
 }
 
-export { createTeam, joinTeam, leaveTeam, getLocalTeam, subscribeToTeam, waitForAuth };
+// ---------------------------------------------------------------- Stage 2:
+// shared activities (existence + definition only — no stamps/logs yet).
+// Each is a doc at rooms/{code}/activities/{id}: { name, timerType,
+// timerDuration, createdBy, createdAt }.
+
+// Create a shared activity in the joined room. Throws if not in a team.
+async function createTeamActivity({ name, timerType, timerDuration }) {
+  const team = loadLocalTeam();
+  if (!team) throw new Error('Join a team first.');
+  const uid = await waitForAuth();
+  const colRef = collection(dbFs, 'rooms', team.code, 'activities');
+  const docRef = await addDoc(colRef, {
+    name,
+    timerType,
+    timerDuration,
+    createdBy: uid,
+    createdAt: serverTimestamp(),
+  });
+  return { id: docRef.id, code: team.code };
+}
+
+// Remove a shared activity for everyone in the room. Safe to call when not
+// in a team (no-op).
+async function deleteTeamActivity(teamActivityId) {
+  const team = loadLocalTeam();
+  if (!team || !teamActivityId) return;
+  await waitForAuth();
+  await deleteDoc(doc(dbFs, 'rooms', team.code, 'activities', teamActivityId));
+}
+
+// Live list of the joined room's shared activities. Calls back on every
+// add/remove/change with { code, activities }. If not in a team, calls back
+// once with { code: null, activities: [] } and returns a no-op unsubscribe.
+function subscribeToTeamActivities(callback) {
+  const team = loadLocalTeam();
+  if (!team) {
+    callback({ code: null, activities: [] });
+    return () => {};
+  }
+  const colRef = collection(dbFs, 'rooms', team.code, 'activities');
+  return onSnapshot(colRef, (snap) => {
+    const activities = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    callback({ code: team.code, activities });
+  }, (err) => {
+    console.error('Team activities listener error', err);
+    callback({ code: team.code, activities: [] });
+  });
+}
+
+// ---------------------------------------------------------------- Stage 3:
+// shared checkbox stamping. Whoever stamps a shared activity marks it done
+// for the whole team — this overwrites the date's log entry rather than
+// accumulating (last write wins), matching the multi-editor nature of a
+// small free-tier sync backend.
+
+// Mark a shared activity done for a date, for everyone in the room.
+async function markTeamActivityDone(code, teamActivityId, date, { seconds = 0, note = '' } = {}) {
+  const uid = await waitForAuth();
+  const ref = doc(dbFs, 'rooms', code, 'activities', teamActivityId);
+  await updateDoc(ref, {
+    [`logs.${date}`]: { done: true, by: uid, seconds, note, at: Date.now() },
+  });
+}
+
+// Undo a shared stamp for a date, for everyone in the room.
+async function unmarkTeamActivityDone(code, teamActivityId, date) {
+  await waitForAuth();
+  const ref = doc(dbFs, 'rooms', code, 'activities', teamActivityId);
+  await updateDoc(ref, { [`logs.${date}`]: deleteField() });
+}
+
+// This device's current uid, for "stamped by you" vs. "by a teammate" — null
+// until anonymous sign-in resolves (briefly, on cold load).
+function getUid() {
+  return currentUid;
+}
+
+export {
+  createTeam, joinTeam, leaveTeam, getLocalTeam, subscribeToTeam, waitForAuth,
+  createTeamActivity, deleteTeamActivity, subscribeToTeamActivities,
+  markTeamActivityDone, unmarkTeamActivityDone, getUid,
+};

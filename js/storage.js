@@ -120,8 +120,12 @@ function getTags() { return db.tags; }
 function getGoals() { return db.tags.filter(t => t.isGoal); }
 
 // ---- Activities ----
+// teamId / teamActivityId (Stage 2): when set, this card mirrors a shared
+// Firestore doc at rooms/{teamId}/activities/{teamActivityId} — null/null
+// for an ordinary personal card.
 function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuration = 1500,
-                         timesPerWeek = 7, preferredDays = [0, 1, 2, 3, 4, 5, 6] }) {
+                         timesPerWeek = 7, preferredDays = [0, 1, 2, 3, 4, 5, 6],
+                         teamId = null, teamActivityId = null }) {
   const activity = {
     id: uid(),
     name: name.trim(),
@@ -130,6 +134,8 @@ function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuratio
     timerDuration,       // seconds, used for countdown
     timesPerWeek,        // how many times per week to do it (7 = daily)
     preferredDays,       // weekday indices 0=Sun..6=Sat
+    teamId,              // room code this card is shared with, or null
+    teamActivityId,       // Firestore doc id backing the shared card, or null
     createdAt: todayStr(),
     logs: {},            // { 'YYYY-MM-DD': { done: true, source: 'manual'|'timer', seconds: number } }
   };

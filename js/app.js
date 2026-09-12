@@ -29,6 +29,38 @@ let viewState = {
 // closeSheet() always tears this down, whichever way a sheet closes.
 let teamUnsub = null;
 
+// Unsubscribe handle for the live team-activities listener. Unlike
+// teamUnsub above, this runs app-wide (not just while Settings is open) —
+// shared cards should appear on the dial as soon as a teammate adds one.
+let teamActivitiesUnsub = null;
+function watchTeamActivities() {
+  if (teamActivitiesUnsub) { teamActivitiesUnsub(); teamActivitiesUnsub = null; }
+  teamActivitiesUnsub = sync.subscribeToTeamActivities(({ code, activities }) => {
+    if (!code) return;
+    let changed = false;
+    activities.forEach((remote) => {
+      const local = db.getActivities().find((a) => a.teamActivityId === remote.id);
+      if (!local) {
+        db.createActivity({
+          name: remote.name,
+          timerType: remote.timerType || 'stopwatch',
+          timerDuration: remote.timerDuration || 1500,
+          teamId: code,
+          teamActivityId: remote.id,
+        });
+        changed = true;
+      } else {
+        const remoteLogs = remote.logs || {};
+        if (JSON.stringify(remoteLogs) !== JSON.stringify(local.logs || {})) {
+          db.updateActivity(local.id, { logs: remoteLogs });
+          changed = true;
+        }
+      }
+    });
+    if (changed) render();
+  });
+}
+
 // ---------------------------------------------------------------- utilities
 function toast(msg) {
   let el = document.querySelector('.toast');
@@ -356,6 +388,12 @@ function buildCard(activity) {
   const node = tplCard.content.firstElementChild.cloneNode(true);
   node.querySelector('.card__title').textContent = activity.name;
   const tagsWrap = node.querySelector('.card__tags');
+  if (activity.teamId) {
+    const teamChip = document.createElement('span');
+    teamChip.className = 'tag-chip is-team';
+    teamChip.textContent = 'Team';
+    tagsWrap.appendChild(teamChip);
+  }
   activityTagObjs(activity).forEach(t => {
     const chip = document.createElement('span');
     chip.className = 'tag-chip' + (t.isGoal ? ' is-goal' : '');
@@ -371,10 +409,14 @@ function buildCard(activity) {
   const now = new Date();
   const pct = Math.round(stats.monthConsistency(activity, now.getFullYear(), now.getMonth()) * 100);
   const since = stats.daysSinceLastLog(activity);
-  node.querySelector('.card__stats').textContent =
-    `${pct}% consistent this month \u00b7 ${since === null ? 'never logged' : since === 0 ? 'logged today' : `${since}d since last`}`;
-
+  let statsText = `${pct}% consistent this month \u00b7 ${since === null ? 'never logged' : since === 0 ? 'logged today' : `${since}d since last`}`;
   const doneToday = db.isDoneOn(activity, db.todayStr());
+  if (activity.teamId && doneToday) {
+    const todayLog = activity.logs[db.todayStr()];
+    const stampedByMe = todayLog && todayLog.by && todayLog.by === sync.getUid();
+    statsText += stampedByMe ? ' \u00b7 stamped by you' : ' \u00b7 stamped by a teammate';
+  }
+  node.querySelector('.card__stats').textContent = statsText;
   const stampBtn = node.querySelector('[data-action="mark-done"]');
   stampBtn.textContent = doneToday ? 'Stamped \u2713' : 'Stamp today';
   stampBtn.classList.toggle('is-done', doneToday);
@@ -389,7 +431,33 @@ function buildCard(activity) {
   return node;
 }
 
-function toggleDone(activity) {
+// Overwrites (not accumulates) a single date's local log entry — used for
+// team cards, where the shared doc is the source of truth and last write
+// wins, unlike db.markDone's local accumulate-seconds behavior.
+function setLocalLog(activity, date, logObj) {
+  db.updateActivity(activity.id, { logs: { ...activity.logs, [date]: logObj } });
+}
+
+async function toggleDone(activity) {
+  const date = db.todayStr();
+  const currentlyDone = db.isDoneOn(activity, date);
+  if (activity.teamId) {
+    try {
+      if (currentlyDone) {
+        await sync.unmarkTeamActivityDone(activity.teamId, activity.teamActivityId, date);
+        db.unmarkDone(activity.id, date);
+        toast('Unstamped for the team');
+      } else {
+        await sync.markTeamActivityDone(activity.teamId, activity.teamActivityId, date, {});
+        setLocalLog(activity, date, { done: true, source: 'manual', seconds: 0, note: '', by: sync.getUid() });
+        toast('Stamped for the team');
+      }
+    } catch (err) {
+      toast(err.message || 'Could not sync stamp \u2014 try again');
+    }
+    render();
+    return;
+  }
   if (db.isDoneOn(activity, db.todayStr())) {
     db.unmarkDone(activity.id);
     toast('Unstamped');
@@ -414,6 +482,12 @@ function renderList() {
     const node = tplRow.content.firstElementChild.cloneNode(true);
     node.querySelector('.row__title').textContent = activity.name;
     const tagsWrap = node.querySelector('.row__tags');
+    if (activity.teamId) {
+      const teamChip = document.createElement('span');
+      teamChip.className = 'tag-chip is-team';
+      teamChip.textContent = 'Team';
+      tagsWrap.appendChild(teamChip);
+    }
     activityTagObjs(activity).forEach(t => {
       const chip = document.createElement('span');
       chip.className = 'tag-chip' + (t.isGoal ? ' is-goal' : '');
@@ -845,8 +919,22 @@ function openDetail(activityId) {
           const el = document.createElement('div');
           el.className = 'cal-cell' + (db.isDoneOn(activity, dateStr) ? ' is-done' : '') + (dateStr === todayS ? ' is-today' : '');
           el.textContent = d;
-          el.onclick = () => {
-            if (db.isDoneOn(activity, dateStr)) db.unmarkDone(activity.id, dateStr);
+          el.onclick = async () => {
+            const isDone = db.isDoneOn(activity, dateStr);
+            if (activity.teamId) {
+              try {
+                if (isDone) await sync.unmarkTeamActivityDone(activity.teamId, activity.teamActivityId, dateStr);
+                else await sync.markTeamActivityDone(activity.teamId, activity.teamActivityId, dateStr, {});
+              } catch (err) {
+                toast(err.message || 'Could not sync \u2014 try again');
+              }
+              if (isDone) db.unmarkDone(activity.id, dateStr);
+              else setLocalLog(activity, dateStr, { done: true, source: 'manual', seconds: 0, note: '', by: sync.getUid() });
+              renderCalendar();
+              refreshStreak();
+              return;
+            }
+            if (isDone) db.unmarkDone(activity.id, dateStr);
             else db.markDone(activity.id, { source: 'manual', date: dateStr });
             renderCalendar();
             refreshStreak();
@@ -884,9 +972,20 @@ function openDetail(activityId) {
           sheet.querySelector('#log-mins').focus();
         }
       };
-      sheet.querySelector('#log-save').onclick = () => {
+      sheet.querySelector('#log-save').onclick = async () => {
         const mins = Math.max(1, parseInt(sheet.querySelector('#log-mins').value, 10) || 0);
-        db.markDone(activity.id, { source: 'manual', seconds: mins * 60, note: logNote.value.trim() });
+        const date = db.todayStr();
+        const note = logNote.value.trim();
+        if (activity.teamId) {
+          try {
+            await sync.markTeamActivityDone(activity.teamId, activity.teamActivityId, date, { seconds: mins * 60, note });
+          } catch (err) {
+            toast(err.message || 'Could not sync \u2014 try again');
+          }
+          setLocalLog(activity, date, { done: true, source: 'manual', seconds: mins * 60, note, by: sync.getUid() });
+        } else {
+          db.markDone(activity.id, { source: 'manual', seconds: mins * 60, note });
+        }
         logPanel.hidden = true;
         refreshDetail();
         render();
@@ -895,13 +994,20 @@ function openDetail(activityId) {
       sheet.querySelector('#opt-timer').onclick = () => { closeSheet(); openTimer(activity); };
       sheet.querySelector('#opt-cancel').onclick = closeSheet;
       sheet.querySelector('#detail-edit').onclick = () => openActivityForm(activity);
-      sheet.querySelector('#detail-delete').onclick = () => {
-        if (confirm(`Delete "${activity.name}"? This can't be undone.`)) {
-          db.deleteActivity(activity.id);
-          closeSheet();
-          render();
-          toast('Card removed');
+      sheet.querySelector('#detail-delete').onclick = async () => {
+        const isTeam = !!activity.teamId;
+        const msg = isTeam
+          ? `Delete "${activity.name}" for the whole team? This can't be undone.`
+          : `Delete "${activity.name}"? This can't be undone.`;
+        if (!confirm(msg)) return;
+        if (isTeam) {
+          try { await sync.deleteTeamActivity(activity.teamActivityId); }
+          catch (e) { /* Firestore doc may already be gone — local delete still proceeds. */ }
         }
+        db.deleteActivity(activity.id);
+        closeSheet();
+        render();
+        toast(isTeam ? 'Removed for the team' : 'Card removed');
       };
     }
   });
@@ -956,6 +1062,11 @@ function openActivityForm(existing = null) {
       <label>Countdown length (minutes)</label>
       <input type="number" id="f-duration" min="1" max="180" value="${existing ? Math.round((existing.timerDuration||1500)/60) : 15}">
     </div>
+    ${!existing && sync.getLocalTeam() ? `
+    <div class="switch-row">
+      <div><div>Share with team</div><div style="font-size:11px;opacity:.6;">Everyone in your team will see this card, and stamping it marks it done for the whole team. Tags and schedule stay local for now.</div></div>
+      <label class="switch"><input type="checkbox" id="f-team-share"><span class="switch__track"></span></label>
+    </div>` : ''}
     <button class="btn btn--primary btn--full" id="f-save" style="margin-top:6px;">${existing ? 'Save changes' : 'File this card'}</button>
   `, {
     onMount: (sheet) => {
@@ -1022,11 +1133,23 @@ function openActivityForm(existing = null) {
         };
       });
 
-      sheet.querySelector('#f-save').onclick = () => {
+      sheet.querySelector('#f-save').onclick = async () => {
         const name = sheet.querySelector('#f-name').value.trim();
         if (!name) { toast('Give it a name first'); return; }
         const timerType = sheet.querySelector('input[name="f-timertype"]:checked').value;
         const minutes = parseInt(sheet.querySelector('#f-duration').value, 10) || 15;
+        const shareEl = sheet.querySelector('#f-team-share');
+        if (shareEl && shareEl.checked) {
+          try {
+            await sync.createTeamActivity({ name, timerType, timerDuration: minutes * 60 });
+          } catch (err) {
+            toast(err.message || 'Could not share with team');
+            return;
+          }
+          closeSheet();
+          toast('Shared with team \u2014 appears on every device in a moment');
+          return;
+        }
         const payload = {
           name,
           tags: Array.from(selected),
@@ -1100,6 +1223,7 @@ function openTagForm({ isGoal = false, existing = null } = {}) {
 // closeSheet() (above) always tears the listener down, however the sheet closes.
 function mountTeamPanel(container) {
   function renderJoinedState(info) {
+    const sharedCount = db.getActivities().filter((a) => a.teamId === info.code).length;
     container.innerHTML = `
       <div class="team-code">
         <div>
@@ -1108,7 +1232,7 @@ function mountTeamPanel(container) {
         </div>
         <button class="btn btn--sm btn--ghost" id="team-copy" style="border-color:#067647;color:#067647;">Copy</button>
       </div>
-      <div class="team-status">${info.memberCount == null ? 'Syncing\u2026' : info.memberCount + (info.memberCount === 1 ? ' person synced' : ' people synced')}</div>
+      <div class="team-status">${info.memberCount == null ? 'Syncing\u2026' : info.memberCount + (info.memberCount === 1 ? ' person synced' : ' people synced')} \u00b7 ${sharedCount} shared card${sharedCount === 1 ? '' : 's'}</div>
       <button class="btn btn--text" id="team-leave" style="color:#a8432d;margin-top:8px;">Leave team</button>
     `;
     container.querySelector('#team-copy').onclick = async () => {
@@ -1119,6 +1243,7 @@ function mountTeamPanel(container) {
       if (!confirm('Leave this team? You can rejoin later with the code.')) return;
       await sync.leaveTeam();
       mountTeamPanel(container);
+      watchTeamActivities();
     };
   }
 
@@ -1143,6 +1268,7 @@ function mountTeamPanel(container) {
         await sync.createTeam();
         toast('Team created');
         mountTeamPanel(container);
+        watchTeamActivities();
       } catch (err) {
         statusEl.style.color = '#a8432d';
         statusEl.textContent = err.message || 'Could not create a team.';
@@ -1162,6 +1288,7 @@ function mountTeamPanel(container) {
         await sync.joinTeam(code);
         toast('Joined team');
         mountTeamPanel(container);
+        watchTeamActivities();
       } catch (err) {
         statusEl.style.color = '#a8432d';
         statusEl.textContent = err.message || 'Could not join that team.';
@@ -1427,12 +1554,29 @@ function openTimer(activity, { onDone } = {}) {
         toast(completed ? 'Countdown complete \u2014 logged & stamped' : `Logged ${mins} min \u2014 stamped`);
         onDone && onDone();
       };
-      overlay.querySelector('#timer-note-save').onclick = () => {
+      const syncIfTeam = async () => {
+        if (!activity.teamId) return;
+        const date = db.todayStr();
+        const log = activity.logs[date] || { seconds, note: '' };
+        try {
+          await sync.markTeamActivityDone(activity.teamId, activity.teamActivityId, date, {
+            seconds: log.seconds || seconds, note: log.note || '',
+          });
+          setLocalLog(activity, date, { done: true, source: 'timer', seconds: log.seconds || seconds, note: log.note || '', by: sync.getUid() });
+        } catch (err) {
+          toast(err.message || 'Could not sync \u2014 try again');
+        }
+      };
+      overlay.querySelector('#timer-note-save').onclick = async () => {
         const val = noteInput.value.trim();
         if (val) db.setLogNote(activity.id, db.todayStr(), val);
+        await syncIfTeam();
         done();
       };
-      overlay.querySelector('#timer-skip').onclick = done;
+      overlay.querySelector('#timer-skip').onclick = async () => {
+        await syncIfTeam();
+        done();
+      };
     },
   });
 
@@ -1545,4 +1689,5 @@ function showWelcome() {
 }
 
 render();
+watchTeamActivities();
 if (!localStorage.getItem('chronodo-welcomed')) showWelcome();

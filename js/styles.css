@@ -946,3 +946,4 @@ button { font-family: inherit; }
 .team-code__label { font-size: 11px; opacity: 0.6; }
 .team-code__value { font-size: 16px; font-weight: 800; letter-spacing: 0.05em; }
 .team-status { font-size: 12px; margin-top: 8px; }
+.tag-chip.is-team { background: var(--color-brass-dark); color: var(--color-ink); font-weight: 700; }
