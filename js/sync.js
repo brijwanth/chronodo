@@ -21,6 +21,10 @@ const firebaseConfig = {
 };
 
 const TEAM_KEY = 'rolodex-team-v1';
+// Doc ids this device has deliberately unlinked from (Stage 2.5's "un-share,
+// just for me") — the live watcher below filters these out so they don't
+// silently get re-created moments after being removed.
+const IGNORED_KEY = 'rolodex-team-ignored-v1';
 // No 0/O/1/I — avoids codes that look ambiguous when read aloud or handwritten.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
@@ -53,6 +57,29 @@ function loadLocalTeam() {
 function saveLocalTeam(team) {
   if (team) localStorage.setItem(TEAM_KEY, JSON.stringify(team));
   else localStorage.removeItem(TEAM_KEY);
+}
+
+function loadIgnored() {
+  try {
+    const raw = localStorage.getItem(IGNORED_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function saveIgnored(list) {
+  localStorage.setItem(IGNORED_KEY, JSON.stringify(list));
+}
+
+// Permanently stop mirroring one shared activity to this device (this
+// device's local copy is expected to already be detached/converted by the
+// caller — this just keeps the watcher from re-creating it).
+function ignoreTeamActivity(teamActivityId) {
+  const list = loadIgnored();
+  if (!list.includes(teamActivityId)) {
+    list.push(teamActivityId);
+    saveIgnored(list);
+  }
 }
 
 function randomCode() {
@@ -138,7 +165,9 @@ function subscribeToTeam(callback) {
 // timerDuration, createdBy, createdAt }.
 
 // Create a shared activity in the joined room. Throws if not in a team.
-async function createTeamActivity({ name, timerType, timerDuration }) {
+// `logs`, if given, seeds the shared doc's starting history — used when
+// converting an existing personal card so its past stamps carry over.
+async function createTeamActivity({ name, timerType, timerDuration, logs = {} }) {
   const team = loadLocalTeam();
   if (!team) throw new Error('Join a team first.');
   const uid = await waitForAuth();
@@ -147,6 +176,7 @@ async function createTeamActivity({ name, timerType, timerDuration }) {
     name,
     timerType,
     timerDuration,
+    logs,
     createdBy: uid,
     createdAt: serverTimestamp(),
   });
@@ -173,7 +203,10 @@ function subscribeToTeamActivities(callback) {
   }
   const colRef = collection(dbFs, 'rooms', team.code, 'activities');
   return onSnapshot(colRef, (snap) => {
-    const activities = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const ignored = loadIgnored();
+    const activities = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((a) => !ignored.includes(a.id));
     callback({ code: team.code, activities });
   }, (err) => {
     console.error('Team activities listener error', err);
@@ -212,5 +245,5 @@ function getUid() {
 export {
   createTeam, joinTeam, leaveTeam, getLocalTeam, subscribeToTeam, waitForAuth,
   createTeamActivity, deleteTeamActivity, subscribeToTeamActivities,
-  markTeamActivityDone, unmarkTeamActivityDone, getUid,
+  markTeamActivityDone, unmarkTeamActivityDone, getUid, ignoreTeamActivity,
 };

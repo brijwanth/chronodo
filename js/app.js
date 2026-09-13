@@ -870,6 +870,8 @@ function openDetail(activityId) {
       <div class="consistency-track"><div class="consistency-fill" id="cons-fill"></div></div>
     </div>
     <div class="card__actions" style="margin-top:18px;">
+      ${!activity.teamId && sync.getLocalTeam() ? '<button class="btn btn--ghost" id="detail-share-team" style="border-color:#067647;color:#067647;">Share with team</button>' : ''}
+      ${activity.teamId ? '<button class="btn btn--ghost" id="detail-unshare-team">Unshare (keep for me)</button>' : ''}
       <button class="btn btn--ghost" id="detail-edit">Edit</button>
       <button class="btn btn--text" id="detail-delete" style="color:#a8432d;">Delete card</button>
     </div>
@@ -993,7 +995,43 @@ function openDetail(activityId) {
       };
       sheet.querySelector('#opt-timer').onclick = () => { closeSheet(); openTimer(activity); };
       sheet.querySelector('#opt-cancel').onclick = closeSheet;
+      const shareBtn = sheet.querySelector('#detail-share-team');
+      if (shareBtn) {
+        shareBtn.onclick = async () => {
+          if (!confirm(`Share "${activity.name}" with your team? Your existing history comes along and becomes visible to everyone. Tags stay local-only for now.`)) return;
+          try {
+            const logsToShare = { ...activity.logs };
+            const todayKey = db.todayStr();
+            if (logsToShare[todayKey] && !logsToShare[todayKey].by) {
+              logsToShare[todayKey] = { ...logsToShare[todayKey], by: sync.getUid() };
+            }
+            const result = await sync.createTeamActivity({
+              name: activity.name,
+              timerType: activity.timerType,
+              timerDuration: activity.timerDuration,
+              logs: logsToShare,
+            });
+            db.updateActivity(activity.id, { teamId: result.code, teamActivityId: result.id, logs: logsToShare });
+            closeSheet();
+            render();
+            toast('Shared with team \u2014 history included');
+          } catch (err) {
+            toast(err.message || 'Could not share with team');
+          }
+        };
+      }
       sheet.querySelector('#detail-edit').onclick = () => openActivityForm(activity);
+      const unshareBtn = sheet.querySelector('#detail-unshare-team');
+      if (unshareBtn) {
+        unshareBtn.onclick = () => {
+          if (!confirm(`Stop syncing "${activity.name}" with the team? It stays on your device as a personal card with its current history, but you won't see further updates from teammates. The team keeps seeing it as before.`)) return;
+          sync.ignoreTeamActivity(activity.teamActivityId);
+          db.updateActivity(activity.id, { teamId: null, teamActivityId: null });
+          closeSheet();
+          render();
+          toast('Unlinked \u2014 now a personal card');
+        };
+      }
       sheet.querySelector('#detail-delete').onclick = async () => {
         const isTeam = !!activity.teamId;
         const msg = isTeam
