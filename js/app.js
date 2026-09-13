@@ -41,12 +41,15 @@ function watchTeamActivities() {
     activities.forEach((remote) => {
       const local = db.getActivities().find((a) => a.teamActivityId === remote.id);
       if (!local) {
+        const goalTag = remote.teamGoalId ? db.getTags().find((t) => t.teamGoalId === remote.teamGoalId) : null;
         db.createActivity({
           name: remote.name,
           timerType: remote.timerType || 'stopwatch',
           timerDuration: remote.timerDuration || 1500,
           teamId: code,
           teamActivityId: remote.id,
+          teamGoalId: remote.teamGoalId || null,
+          tags: goalTag ? [goalTag.id] : [],
         });
         changed = true;
       } else {
@@ -56,6 +59,32 @@ function watchTeamActivities() {
           changed = true;
         }
       }
+    });
+    if (changed) render();
+  });
+}
+
+// Unsubscribe handle for the live team-goals listener. Mirrors shared goals
+// into local db.tags (as goal-tags) and backfills the tag link onto any
+// team activity that already synced before its goal did.
+let teamGoalsUnsub = null;
+function watchTeamGoals() {
+  if (teamGoalsUnsub) { teamGoalsUnsub(); teamGoalsUnsub = null; }
+  teamGoalsUnsub = sync.subscribeToTeamGoals(({ code, goals }) => {
+    if (!code) return;
+    let changed = false;
+    goals.forEach((remote) => {
+      let goalTag = db.getTags().find((t) => t.teamGoalId === remote.id);
+      if (!goalTag) {
+        goalTag = db.createTag({ name: remote.name, isGoal: true, teamGoalId: remote.id });
+        changed = true;
+      }
+      db.getActivities().forEach((a) => {
+        if (a.teamGoalId === remote.id && !a.tags.includes(goalTag.id)) {
+          db.updateActivity(a.id, { tags: [...a.tags, goalTag.id] });
+          changed = true;
+        }
+      });
     });
     if (changed) render();
   });
@@ -1104,6 +1133,13 @@ function openActivityForm(existing = null) {
     <div class="switch-row">
       <div><div>Share with team</div><div style="font-size:11px;opacity:.6;">Everyone in your team will see this card, and stamping it marks it done for the whole team. Tags and schedule stay local for now.</div></div>
       <label class="switch"><input type="checkbox" id="f-team-share"><span class="switch__track"></span></label>
+    </div>
+    <div class="field" id="f-team-goal-field" style="display:none;margin-top:10px;">
+      <label>Team goal (optional)</label>
+      <select id="f-team-goal">
+        <option value="">None</option>
+        ${db.getTags().filter(t => t.teamGoalId).map(t => `<option value="${t.teamGoalId}">${t.name.replace(/</g,'&lt;')}</option>`).join('')}
+      </select>
     </div>` : ''}
     <button class="btn btn--primary btn--full" id="f-save" style="margin-top:6px;">${existing ? 'Save changes' : 'File this card'}</button>
   `, {
@@ -1171,6 +1207,12 @@ function openActivityForm(existing = null) {
         };
       });
 
+      const shareToggle = sheet.querySelector('#f-team-share');
+      const goalField = sheet.querySelector('#f-team-goal-field');
+      if (shareToggle && goalField) {
+        shareToggle.onchange = () => { goalField.style.display = shareToggle.checked ? '' : 'none'; };
+      }
+
       sheet.querySelector('#f-save').onclick = async () => {
         const name = sheet.querySelector('#f-name').value.trim();
         if (!name) { toast('Give it a name first'); return; }
@@ -1178,8 +1220,10 @@ function openActivityForm(existing = null) {
         const minutes = parseInt(sheet.querySelector('#f-duration').value, 10) || 15;
         const shareEl = sheet.querySelector('#f-team-share');
         if (shareEl && shareEl.checked) {
+          const goalEl = sheet.querySelector('#f-team-goal');
+          const teamGoalId = (goalEl && goalEl.value) || null;
           try {
-            await sync.createTeamActivity({ name, timerType, timerDuration: minutes * 60 });
+            await sync.createTeamActivity({ name, timerType, timerDuration: minutes * 60, teamGoalId });
           } catch (err) {
             toast(err.message || 'Could not share with team');
             return;
@@ -1259,10 +1303,34 @@ function openTagForm({ isGoal = false, existing = null } = {}) {
 // Renders either the create/join buttons or the joined-team info, and keeps
 // membership live via sync.subscribeToTeam while the Settings sheet is open.
 // closeSheet() (above) always tears the listener down, however the sheet closes.
+// The name field is always shown (even before joining) so it's set before
+// you create/join; the body below it swaps between join/joined states.
 function mountTeamPanel(container) {
+  container.innerHTML = `
+    <div class="field" style="margin-bottom:14px;">
+      <label>Your name</label>
+      <input type="text" id="team-nickname" placeholder="Shown to teammates" maxlength="40" style="width:100%;background:var(--color-bg);border:1px solid var(--color-brass-dark);color:var(--color-cream);border-radius:7px;padding:10px 11px;font-family:var(--font-mono);font-size:13.5px;">
+    </div>
+    <div id="team-body"></div>
+  `;
+  const nicknameInput = container.querySelector('#team-nickname');
+  nicknameInput.value = sync.getNickname();
+  nicknameInput.addEventListener('blur', () => {
+    const val = nicknameInput.value.trim();
+    if (val !== sync.getNickname()) sync.setNickname(val);
+  });
+  const body = container.querySelector('#team-body');
+
   function renderJoinedState(info) {
     const sharedCount = db.getActivities().filter((a) => a.teamId === info.code).length;
-    container.innerHTML = `
+    const myUid = sync.getUid();
+    const memberRows = (info.members || []).map((m) => {
+      const label = m.uid === myUid ? 'You' : (m.nickname || 'Teammate (no name set)');
+      return `<div class="team-member">${label}</div>`;
+    }).join('');
+    const teamGoals = db.getTags().filter((t) => t.teamGoalId);
+    const goalRows = teamGoals.map((g) => `<div class="team-goal-row">${g.name}</div>`).join('');
+    body.innerHTML = `
       <div class="team-code">
         <div>
           <div class="team-code__label">Team code</div>
@@ -1271,22 +1339,43 @@ function mountTeamPanel(container) {
         <button class="btn btn--sm btn--ghost" id="team-copy" style="border-color:#067647;color:#067647;">Copy</button>
       </div>
       <div class="team-status">${info.memberCount == null ? 'Syncing\u2026' : info.memberCount + (info.memberCount === 1 ? ' person synced' : ' people synced')} \u00b7 ${sharedCount} shared card${sharedCount === 1 ? '' : 's'}</div>
-      <button class="btn btn--text" id="team-leave" style="color:#a8432d;margin-top:8px;">Leave team</button>
+      <div class="team-member-list">${memberRows}</div>
+      <div class="section-title" style="margin:16px 0 8px;">Team goals</div>
+      <p style="font-size:11px;opacity:.6;margin:-4px 0 10px;line-height:1.5;">Groups shared cards, the same way personal goals group your own. Assign a card to one when sharing it.</p>
+      <div class="field-row">
+        <input type="text" id="team-goal-input" placeholder="e.g. Get Fit Together" style="flex:1;background:var(--color-bg);border:1px solid var(--color-brass-dark);color:var(--color-cream);border-radius:7px;padding:10px 11px;font-family:var(--font-mono);font-size:13.5px;">
+        <button class="btn btn--ghost" id="team-goal-add" style="border-color:#067647;color:#067647;">Add</button>
+      </div>
+      <div class="team-goal-list">${goalRows || '<p style="opacity:.6;font-size:12px;margin-top:8px;">None yet.</p>'}</div>
+      <button class="btn btn--text" id="team-leave" style="color:#a8432d;margin-top:14px;">Leave team</button>
     `;
-    container.querySelector('#team-copy').onclick = async () => {
+    body.querySelector('#team-copy').onclick = async () => {
       try { await navigator.clipboard.writeText(info.code); toast('Code copied'); }
       catch (e) { toast('Could not copy \u2014 code is ' + info.code); }
     };
-    container.querySelector('#team-leave').onclick = async () => {
+    body.querySelector('#team-goal-add').onclick = async () => {
+      const goalInput = body.querySelector('#team-goal-input');
+      const name = goalInput.value.trim();
+      if (!name) return;
+      try {
+        await sync.createTeamGoal(name);
+        toast('Team goal added');
+        mountTeamPanel(container);
+      } catch (err) {
+        toast(err.message || 'Could not add team goal');
+      }
+    };
+    body.querySelector('#team-leave').onclick = async () => {
       if (!confirm('Leave this team? You can rejoin later with the code.')) return;
       await sync.leaveTeam();
       mountTeamPanel(container);
       watchTeamActivities();
+      watchTeamGoals();
     };
   }
 
   function renderJoinState() {
-    container.innerHTML = `
+    body.innerHTML = `
       <div class="field-row">
         <button class="btn btn--stamp" id="team-create" style="flex:1;">Create a team</button>
         <button class="btn btn--ghost" id="team-join-btn" style="flex:1;">Join with code</button>
@@ -1297,8 +1386,8 @@ function mountTeamPanel(container) {
       </div>
       <div class="team-status" id="team-status"></div>
     `;
-    const statusEl = container.querySelector('#team-status');
-    container.querySelector('#team-create').onclick = async (e) => {
+    const statusEl = body.querySelector('#team-status');
+    body.querySelector('#team-create').onclick = async (e) => {
       e.target.disabled = true;
       statusEl.style.color = '';
       statusEl.textContent = 'Creating team\u2026';
@@ -1307,19 +1396,20 @@ function mountTeamPanel(container) {
         toast('Team created');
         mountTeamPanel(container);
         watchTeamActivities();
+        watchTeamGoals();
       } catch (err) {
         statusEl.style.color = '#a8432d';
         statusEl.textContent = err.message || 'Could not create a team.';
         e.target.disabled = false;
       }
     };
-    const joinRow = container.querySelector('#team-join-row');
-    container.querySelector('#team-join-btn').onclick = () => {
+    const joinRow = body.querySelector('#team-join-row');
+    body.querySelector('#team-join-btn').onclick = () => {
       joinRow.hidden = !joinRow.hidden;
-      if (!joinRow.hidden) container.querySelector('#team-code-input').focus();
+      if (!joinRow.hidden) body.querySelector('#team-code-input').focus();
     };
-    container.querySelector('#team-join-go').onclick = async () => {
-      const code = container.querySelector('#team-code-input').value;
+    body.querySelector('#team-join-go').onclick = async () => {
+      const code = body.querySelector('#team-code-input').value;
       statusEl.style.color = '';
       statusEl.textContent = 'Joining\u2026';
       try {
@@ -1327,6 +1417,7 @@ function mountTeamPanel(container) {
         toast('Joined team');
         mountTeamPanel(container);
         watchTeamActivities();
+        watchTeamGoals();
       } catch (err) {
         statusEl.style.color = '#a8432d';
         statusEl.textContent = err.message || 'Could not join that team.';
@@ -1728,4 +1819,5 @@ function showWelcome() {
 
 render();
 watchTeamActivities();
+watchTeamGoals();
 if (!localStorage.getItem('chronodo-welcomed')) showWelcome();

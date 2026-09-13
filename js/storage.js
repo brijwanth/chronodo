@@ -94,8 +94,10 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', flushNow);
 
 // ---- Tags ----
-function createTag({ name, isGoal = false, color = null }) {
-  const tag = { id: uid(), name: name.trim(), isGoal, color };
+// teamGoalId (Stage 4): when set, this tag mirrors a shared goal at
+// rooms/{code}/goals/{teamGoalId} — null for an ordinary personal tag/goal.
+function createTag({ name, isGoal = false, color = null, teamGoalId = null }) {
+  const tag = { id: uid(), name: name.trim(), isGoal, color, teamGoalId };
   db.tags.push(tag);
   save();
   return tag;
@@ -122,10 +124,12 @@ function getGoals() { return db.tags.filter(t => t.isGoal); }
 // ---- Activities ----
 // teamId / teamActivityId (Stage 2): when set, this card mirrors a shared
 // Firestore doc at rooms/{teamId}/activities/{teamActivityId} — null/null
-// for an ordinary personal card.
+// for an ordinary personal card. teamGoalId (Stage 4): which shared team
+// goal (if any) this shared activity belongs to — used to reconcile the
+// activity-tag link if the goal and activity happen to sync in either order.
 function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuration = 1500,
                          timesPerWeek = 7, preferredDays = [0, 1, 2, 3, 4, 5, 6],
-                         teamId = null, teamActivityId = null }) {
+                         teamId = null, teamActivityId = null, teamGoalId = null }) {
   const activity = {
     id: uid(),
     name: name.trim(),
@@ -136,6 +140,7 @@ function createActivity({ name, tags = [], timerType = 'stopwatch', timerDuratio
     preferredDays,       // weekday indices 0=Sun..6=Sat
     teamId,              // room code this card is shared with, or null
     teamActivityId,       // Firestore doc id backing the shared card, or null
+    teamGoalId,           // Firestore doc id of the shared goal it belongs to, or null
     createdAt: todayStr(),
     logs: {},            // { 'YYYY-MM-DD': { done: true, source: 'manual'|'timer', seconds: number } }
   };
