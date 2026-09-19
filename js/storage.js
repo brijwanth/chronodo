@@ -24,12 +24,28 @@ function defaultDB() {
     settings: {
       recommendationPref: 'balanced', // 'gaps' | 'untouched' | 'balanced'
       autoStartTimer: true,
+      // Reminder preferences. Device-local — never synced to a team room.
+      reminders: {
+        enabled: false,
+        time: '19:00',                 // HH:MM, 24h, this device's local time
+        days: [0, 1, 2, 3, 4, 5, 6],   // weekday indices, 0=Sun..6=Sat
+        onlyIfUnfinished: true,
+        quietStart: '',                // HH:MM, '' = quiet hours off
+        quietEnd: '',
+      },
     },
   };
 }
 
+// Merge a stored snapshot onto the defaults. settings — and the nested
+// reminders block — merge key by key, so a DB written before a preference
+// existed picks up that preference's default instead of undefined.
 function coerce(parsed) {
-  return { ...defaultDB(), ...parsed, settings: { ...defaultDB().settings, ...(parsed.settings || {}) } };
+  const defaults = defaultDB();
+  const parsedSettings = parsed.settings || {};
+  const settings = { ...defaults.settings, ...parsedSettings };
+  settings.reminders = { ...defaults.settings.reminders, ...(parsedSettings.reminders || {}) };
+  return { ...defaults, ...parsed, settings };
 }
 
 function load() {
@@ -211,6 +227,16 @@ function updateSettings(patch) {
   save();
 }
 
+// ---- Reminder preferences ----
+// Kept behind their own accessors so a partial patch merges into the block
+// rather than replacing it wholesale (as updateSettings would).
+function getReminders() { return db.settings.reminders; }
+function updateReminders(patch) {
+  Object.assign(db.settings.reminders, patch);
+  save();
+  return db.settings.reminders;
+}
+
 // ---- Backup / restore (used by Settings' local backup) ----
 // Snapshot everything (activities, tags, settings) for export.
 function exportAll() {
@@ -234,5 +260,6 @@ export {
   createActivity, updateActivity, deleteActivity, getActivities, getActivity,
   markDone, unmarkDone, isDoneOn, setLogNote,
   getSettings, updateSettings,
+  getReminders, updateReminders,
   clearAll, exportAll, importAll,
 };

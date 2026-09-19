@@ -1,4 +1,4 @@
-const CACHE = 'rolodex-v19';
+const CACHE = 'rolodex-v20';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const CORE_ASSETS = [
   './js/storage.js',
   './js/stats.js',
   './js/timer.js',
+  './js/notifications.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
@@ -52,4 +53,43 @@ self.addEventListener('fetch', (event) => {
       }).catch(() => caches.match(req))
     );
   }
+});
+
+// ---------------------------------------------------------------- web push
+// Generic push handler. Works for a plain Web Push payload and for a Firebase
+// Cloud Messaging message, whose JSON nests the text under `notification`.
+// Chronodo has no backend that sends these yet — see README "Web push setup".
+self.addEventListener('push', (event) => {
+  let payload = {};
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch (e) {
+      payload = { notification: { body: event.data.text() } };
+    }
+  }
+  const note = payload.notification || payload;
+  const title = note.title || 'Chronodo';
+  const body = note.body || 'Open Chronodo to finish today’s tasks.';
+  const url = (payload.data && payload.data.url) || note.click_action || './index.html';
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    tag: 'chronodo-reminder',
+    data: { url },
+  }));
+});
+
+// Tapping a notification focuses an open Chronodo window, or opens one.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || './index.html';
+  event.waitUntil((async () => {
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientList) {
+      if ('focus' in client) return client.focus();
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(url);
+  })());
 });

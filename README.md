@@ -54,6 +54,109 @@ it's already stamped that day. Personal tasks go through `db.markDone` /
 `db.unmarkDone`; shared team tasks route through `sync.js` and mirror into the
 local log. The per-task detail calendar can also toggle any date directly.
 
+## Reminders
+
+Reminders come in two layers. **The first works today with no setup; the
+second is a client-side foundation that still needs a backend to actually
+deliver anything.**
+
+### 1. In-app reminders (working now, no setup)
+
+Settings → **Reminders**. Off by default. Preferences live under
+`settings.reminders` in the same `localStorage` blob as everything else:
+
+```js
+reminders: {
+  enabled: false,
+  time: "19:00",              // 24h, this device's local time
+  days: [0,1,2,3,4,5,6],      // 0=Sun .. 6=Sat
+  onlyIfUnfinished: true,     // stay quiet on days you finish everything
+  quietStart: "",             // "" = quiet hours off
+  quietEnd: "",
+}
+```
+
+When Chronodo opens — or returns to the foreground — it checks these and may
+show an in-app banner with **Open Chronodo** / **Dismiss**. The rules:
+
+- only on a selected weekday, and only at or after `time`
+- at most **once per day** (the date of the last banner is kept in
+  `localStorage` under `chronodo-reminder-last-v1`)
+- suppressed inside quiet hours (a range that ends before it starts, e.g.
+  `22:00`→`07:00`, wraps past midnight)
+- with `onlyIfUnfinished`, shown only when tasks remain unstamped today. A goal
+  counts as unfinished when it still has unfinished child tasks, which falls
+  out of counting those tasks directly.
+- never while a timer is running
+
+**This layer only runs while Chronodo is open.** It cannot wake the app or
+fire while the app is closed — that is what push below is for.
+
+### 2. Web push setup (needs a Firebase key **and** a backend)
+
+The client half is implemented in `js/notifications.js`: feature detection,
+permission (requested only from the Settings button, never on load), service
+worker registration, and — once configured — obtaining an FCM token. The
+service worker handles generic `push` events and focuses Chronodo on click.
+
+**To enable push you must supply a VAPID key.** In the Firebase console go to
+Project settings → Cloud Messaging → Web configuration → **Web Push
+certificates**, generate a key pair, and paste the public key into:
+
+```js
+// js/notifications.js
+const VAPID_PUBLIC_KEY = '';   // <-- paste the Web Push certificate key here
+```
+
+It ships empty on purpose. Until it is set, Settings shows *"Push setup needs
+a Firebase Web Push certificate/VAPID key."* and no push code runs.
+
+### What still needs a backend
+
+**A PWA cannot schedule its own future push notifications.** Nothing in this
+repo can make a reminder appear while Chronodo is closed. Getting that working
+requires server-side work that is *not* included here:
+
+1. **Store device tokens** — send the FCM token from `getStoredToken()` to a
+   server (a Firestore collection alongside the existing team rooms is the
+   natural spot).
+2. **Store reminder preferences** — `time`, `days`, quiet hours, and the
+   device's timezone, so a job knows when to fire.
+3. **Run a scheduler** — a Cloud Scheduler → Cloud Function (or any cron) that
+   wakes every N minutes, finds devices whose reminder time just passed, and
+4. **Sends the FCM message** to those tokens.
+
+Because Chronodo is local-first, the server does not know what you have
+stamped. Two ways to resolve that:
+
+- **Generic push** *(no data leaves the device)* — always send the same copy,
+  e.g. *"Open Chronodo to finish today's tasks."* The `onlyIfUnfinished`
+  preference cannot be honoured server-side, so the app re-checks locally when
+  you open it.
+- **Cloud-synced task state** — sync per-day completion counts to the backend
+  so it can skip devices that are already done and send precise copy like
+  *"3 tasks still unstamped."* This trades away the local-only privacy
+  property, so it should be opt-in.
+
+### Known reliability limits
+
+Even with a backend, push on mobile is best-effort, not an alarm clock:
+
+- **Android battery optimisation / Doze** can delay or drop notifications for
+  apps it considers idle; users may need to exempt Chronodo.
+- **Installed-PWA requirement** — on Android, web push generally needs the app
+  installed (or a TWA wrapper); notifications are blocked in some in-app
+  browsers entirely.
+- **iOS Safari** only supports web push for apps added to the Home Screen, on
+  recent iOS versions.
+- **Permission is revocable** at the OS or browser level at any time, and a
+  denied permission cannot be re-requested from the page — the user has to
+  re-enable it in browser/app settings.
+- **FCM tokens rotate**; a real backend has to refresh and prune dead tokens.
+
+If you need a hard guarantee that a reminder fires at a set time on Android,
+a native alarm in a wrapper app is the reliable route — not web push.
+
 ## File map
 
 ```
@@ -62,6 +165,7 @@ css/styles.css           all styling (design tokens at the top)
 js/storage.js            data model + localStorage persistence + backup snapshot
 js/stats.js              streaks, monthly consistency %, recommendations
 js/timer.js              stopwatch/countdown engine
+js/notifications.js      permission, local notifications, FCM push client (needs a VAPID key)
 js/app.js                views, rendering, forms, gestures — the controller
 manifest.json             PWA metadata (name, icons, colors)
 service-worker.js        offline caching
