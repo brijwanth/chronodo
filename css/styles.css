@@ -260,6 +260,10 @@ button { font-family: inherit; }
   color: var(--color-brass);
   font-weight: 700;
 }
+/* Goal entries on the dial read as containers, not plain tasks */
+.watch-label--goal .watch-label__txt { color: var(--color-sage-dark); }
+.watch-label--goal.is-current .watch-label__txt { color: var(--color-sage); }
+.watch-label--goal .watch-label__tick { background: var(--color-sage-dark); }
 .watch-label.is-current .watch-label__tick { background: var(--color-brass); width: 20px; height: 3px; }
 
 /* the fixed pointer at 3 o'clock — the read-off mark */
@@ -736,6 +740,23 @@ button { font-family: inherit; }
   cursor: pointer;
 }
 .chip-toggle.is-on { background: var(--color-brass); color: var(--color-ink); font-weight: 700; }
+/* Single-select (goal) chips: selected one reads as filled/green */
+.chip-toggle--radio.is-on { background: var(--color-sage); color: #ffffff; border-color: var(--color-sage-dark); }
+
+/* Goal "run" picker (dial → goal with multiple unfinished tasks) */
+.goal-run-list { display: flex; flex-direction: column; gap: 8px; }
+.goal-run-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius-sm);
+}
+.goal-run-row__name { flex: 1; min-width: 120px; font-family: var(--font-display); font-weight: 700; font-size: 15px; }
+.goal-run-row__actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .radio-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .radio-row label {
   display: flex; align-items: center; gap: 6px;

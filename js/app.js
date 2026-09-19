@@ -238,24 +238,82 @@ function renderFilterBar(container) {
 }
 
 // ---------------------------------------------------------------- watch-dial view
+// Build the ordered list of dial items: derived goal containers (only when
+// unfiltered) followed by individual tasks. Goals are UI-only objects derived
+// from goal tags + activities — never stored as activities. A goal appears
+// only while it still has a task unstamped today, mirroring how a stamped task
+// drops off the dial. "No goal" is never a dial item.
+function dialItems() {
+  const today = db.todayStr();
+  const pool = filteredActivities();
+  const tasks = pool.filter(a => !db.isDoneOn(a, today));
+  const taskItems = tasks.map(a => ({ type: 'task', key: a.id, name: a.name, activity: a }));
+  if (viewState.activeTagFilter !== null) return { pool, items: taskItems };
+  const goalItems = db.getGoals().map(goal => {
+    const unfinished = db.getActivities().filter(a => a.tags.includes(goal.id) && !db.isDoneOn(a, today));
+    return { type: 'goal', key: 'goal:' + goal.id, name: goal.name, goal, tasks: unfinished };
+  }).filter(g => g.tasks.length > 0);
+  return { pool, items: [...goalItems, ...taskItems] };
+}
+
+// Open a goal from the dial: jump straight to its only unfinished task, or
+// show a picker when several remain. The goal itself is never stamped.
+function openGoalRun(goal) {
+  const today = db.todayStr();
+  const unfinished = db.getActivities().filter(a => a.tags.includes(goal.id) && !db.isDoneOn(a, today));
+  if (unfinished.length === 0) { toast('All tasks in this goal are stamped today'); render(); return; }
+  if (unfinished.length === 1) { openDetail(unfinished[0].id); return; }
+  openGoalPicker(goal, unfinished);
+}
+
+function openGoalPicker(goal, tasks) {
+  openSheet(`
+    <div class="sheet__head">
+      <h2 class="sheet__title">★ ${goal.name.replace(/</g, '&lt;')}</h2>
+      <button class="sheet__close" aria-label="Close">&times;</button>
+    </div>
+    <p class="goals-intro">Tasks still to do today under this goal. Stamp one, run its timer, or open it.</p>
+    <div class="goal-run-list" id="goal-run-list"></div>
+  `, {
+    onMount: (sheet) => {
+      sheet.querySelector('.sheet__close').onclick = closeSheet;
+      const list = sheet.querySelector('#goal-run-list');
+      tasks.forEach(a => {
+        const row = document.createElement('div');
+        row.className = 'goal-run-row';
+        row.innerHTML = `<span class="goal-run-row__name"></span>
+          <div class="goal-run-row__actions">
+            <button class="btn btn--stamp btn--sm" data-a="stamp">Stamp</button>
+            <button class="btn btn--ghost btn--sm" data-a="timer">Timer</button>
+            <button class="btn btn--text btn--sm" data-a="open">Open</button>
+          </div>`;
+        row.querySelector('.goal-run-row__name').textContent = a.name;
+        row.querySelector('[data-a="stamp"]').onclick = async () => { await toggleDone(a); closeSheet(); };
+        row.querySelector('[data-a="timer"]').onclick = () => { closeSheet(); openTimer(a); };
+        row.querySelector('[data-a="open"]').onclick = () => openDetail(a.id);
+        list.appendChild(row);
+      });
+    }
+  });
+}
+
 function renderRolodex() {
   renderFilterBar(mainEl);
-  const pool = filteredActivities();
-  // On the dial, drop anything already accomplished today — it comes back tomorrow.
-  const acts = pool.filter(a => !db.isDoneOn(a, db.todayStr()));
+  const { pool, items } = dialItems();
   if (pool.length === 0) {
-    emptyState('No cards yet', 'Tap the + button to file your first activity in the drawer.');
+    emptyState('No cards yet', 'Tap the + button to file your first task in the drawer.');
     return;
   }
-  if (acts.length === 0) {
+  if (items.length === 0) {
     emptyState('All done for today', 'Every card here is stamped — they\u2019ll be back on the dial tomorrow.');
     return;
   }
-  if (viewState.rolodexIndex >= acts.length) viewState.rolodexIndex = 0;
+  if (viewState.rolodexIndex >= items.length) viewState.rolodexIndex = 0;
 
-  const n = acts.length;
+  const n = items.length;
   const i = viewState.rolodexIndex;
   const at = k => ((k % n) + n) % n;
+  const openItem = (item) => { if (item.type === 'goal') openGoalRun(item.goal); else openDetail(item.activity.id); };
 
   // one step between neighbouring cards on the rim; tighten it as the drawer fills
   const step = Math.max(20, Math.min(34, 150 / n));
@@ -285,13 +343,13 @@ function renderRolodex() {
     };
   };
 
-  const labels = acts.map((a, idx) => {
+  const labels = items.map((item, idx) => {
     const el = document.createElement('button');
-    el.className = 'watch-label';
+    el.className = 'watch-label' + (item.type === 'goal' ? ' watch-label--goal' : '');
     el.type = 'button';
     el.innerHTML = '<span class="watch-label__txt"></span><span class="watch-label__tick"></span>';
-    el.querySelector('.watch-label__txt').textContent = a.name;
-    el.onclick = () => { if (idx === i) { openDetail(acts[idx].id); return; } viewState.rolodexIndex = idx; render(); };
+    el.querySelector('.watch-label__txt').textContent = (item.type === 'goal' ? '★ ' : '') + item.name;
+    el.onclick = () => { if (idx === i) { openItem(items[idx]); return; } viewState.rolodexIndex = idx; render(); };
     rotor.appendChild(el);
     return el;
   });
@@ -317,10 +375,14 @@ function renderRolodex() {
   paint(0);
 
   // the selection read-off at the pointer — tap to open the card full-screen
+  const current = items[i];
   const openBtn = stage.querySelector('.watch-open');
-  openBtn.innerHTML = `<span class="watch-open__name"></span><span class="watch-open__hint">Tap to open</span>`;
-  openBtn.querySelector('.watch-open__name').textContent = acts[i].name;
-  openBtn.onclick = () => openDetail(acts[i].id);
+  const hint = current.type === 'goal'
+    ? `Goal · ${current.tasks.length} to do · tap to run`
+    : 'Tap to open';
+  openBtn.innerHTML = `<span class="watch-open__name"></span><span class="watch-open__hint">${hint}</span>`;
+  openBtn.querySelector('.watch-open__name').textContent = (current.type === 'goal' ? '★ ' : '') + current.name;
+  openBtn.onclick = () => openItem(current);
 
   attachDialDrag(stage, step, extraDeg => {
     // select whichever card the drag brought round to the pointer
@@ -336,8 +398,8 @@ function renderRolodex() {
     <button class="rolodex-nav__btn" id="rolo-next" aria-label="Next card">&#8595;</button>
   `;
   mainEl.appendChild(nav);
-  nav.querySelector('#rolo-prev').onclick = () => stepRolodex(-1, acts);
-  nav.querySelector('#rolo-next').onclick = () => stepRolodex(1, acts);
+  nav.querySelector('#rolo-prev').onclick = () => stepRolodex(-1, items);
+  nav.querySelector('#rolo-next').onclick = () => stepRolodex(1, items);
 }
 
 // Turn the dial by dragging vertically anywhere on the stage; the rotor tracks
@@ -1334,10 +1396,14 @@ function openDetail(activityId) {
 // presetGoalId (optional): preselect a goal when creating a new task from the
 // Goals & Tags view's "New task in this goal" quick action.
 function openActivityForm(existing = null, { presetGoalId = null } = {}) {
-  const selected = new Set(existing ? existing.tags : []);
-  if (!existing && presetGoalId && db.getTags().some(t => t.id === presetGoalId && t.isGoal)) {
-    selected.add(presetGoalId);
-  }
+  // A task carries at most one primary goal plus any number of plain tags,
+  // all stored together in activity.tags. Split the existing membership into
+  // the single primary goal (first goal-tag found) and the plain tag set.
+  const goalIds = new Set(db.getGoals().map(g => g.id));
+  const existingTags = existing ? existing.tags : [];
+  let primaryGoal = existingTags.find(id => goalIds.has(id)) || null;
+  if (!existing && presetGoalId && goalIds.has(presetGoalId)) primaryGoal = presetGoalId;
+  const selectedTags = new Set(existingTags.filter(id => !goalIds.has(id)));
   openSheet(`
     <div class="sheet__head">
       <h2 class="sheet__title">${existing ? 'Edit task' : 'New task'}</h2>
@@ -1348,7 +1414,7 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
       <input type="text" id="f-name" placeholder="e.g. Read 20 pages" value="${existing ? existing.name.replace(/"/g,'&quot;') : ''}">
     </div>
     <div class="field form-goalbox">
-      <label>Goal <span class="field-hint">the larger outcome this task works toward</span></label>
+      <label>Goal <span class="field-hint">the larger outcome this task works toward · pick one</span></label>
       <div class="chip-toggle-group" id="f-goals"></div>
     </div>
     <div class="field form-tagbox">
@@ -1408,26 +1474,26 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
       function renderChips() {
         const goals = db.getGoals();
         const plainTags = db.getTags().filter(t => !t.isGoal);
-        const buildChip = (tag, prefix) => {
+
+        // Goals: single-select radio-style chips, plus an always-present
+        // "No goal" option. Selecting one replaces the primary goal.
+        goalWrap.innerHTML = '';
+        const noneChip = document.createElement('button');
+        noneChip.type = 'button';
+        noneChip.className = 'chip-toggle chip-toggle--radio' + (primaryGoal === null ? ' is-on' : '');
+        noneChip.textContent = 'No goal';
+        noneChip.onclick = () => { primaryGoal = null; renderChips(); };
+        goalWrap.appendChild(noneChip);
+        goals.forEach(g => {
           const chip = document.createElement('button');
           chip.type = 'button';
-          chip.className = 'chip-toggle' + (selected.has(tag.id) ? ' is-on' : '');
-          chip.textContent = prefix + tag.name;
-          chip.onclick = () => {
-            if (selected.has(tag.id)) selected.delete(tag.id); else selected.add(tag.id);
-            renderChips();
-          };
-          return chip;
-        };
-        goalWrap.innerHTML = '';
-        if (goals.length === 0) {
-          const p = document.createElement('p');
-          p.style.cssText = 'opacity:.6;font-size:12px;';
-          p.textContent = 'No goals yet \u2014 add one below.';
-          goalWrap.appendChild(p);
-        } else {
-          goals.forEach(g => goalWrap.appendChild(buildChip(g, '\u2605 ')));
-        }
+          chip.className = 'chip-toggle chip-toggle--radio' + (primaryGoal === g.id ? ' is-on' : '');
+          chip.textContent = '\u2605 ' + g.name;
+          chip.onclick = () => { primaryGoal = (primaryGoal === g.id ? null : g.id); renderChips(); };
+          goalWrap.appendChild(chip);
+        });
+
+        // Tags: multi-select toggles.
         tagWrap.innerHTML = '';
         if (plainTags.length === 0) {
           const p = document.createElement('p');
@@ -1435,7 +1501,17 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
           p.textContent = 'No tags yet — add one below.';
           tagWrap.appendChild(p);
         } else {
-          plainTags.forEach(t => tagWrap.appendChild(buildChip(t, '#')));
+          plainTags.forEach(t => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'chip-toggle' + (selectedTags.has(t.id) ? ' is-on' : '');
+            chip.textContent = '#' + t.name;
+            chip.onclick = () => {
+              if (selectedTags.has(t.id)) selectedTags.delete(t.id); else selectedTags.add(t.id);
+              renderChips();
+            };
+            tagWrap.appendChild(chip);
+          });
         }
       }
       renderChips();
@@ -1467,7 +1543,7 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
         if (!name) return;
         const isGoal = sheet.querySelector('#f-newtag-type').value === 'goal';
         const tag = db.createTag({ name, isGoal });
-        selected.add(tag.id);
+        if (isGoal) primaryGoal = tag.id; else selectedTags.add(tag.id);
         nameInput.value = '';
         renderChips();
       };
@@ -1506,7 +1582,7 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
         }
         const payload = {
           name,
-          tags: Array.from(selected),
+          tags: [...(primaryGoal ? [primaryGoal] : []), ...selectedTags],
           timerType,
           timerDuration: minutes * 60,
           timesPerWeek: Math.max(1, Math.min(7, parseInt(sheet.querySelector('#f-perweek').value, 10) || 7)),

@@ -30,10 +30,20 @@ The model has three levels, all backed by the same storage:
 
 The **Goals & Tags** view lists each goal with the tasks filed under it, a
 **No goal** bucket for tasks with no goal, and a quick action to create a new
-task already linked to a goal. The task form separates Goal selection from Tag
-selection, but both still write to `activity.tags`, so storage is unchanged and
-existing data keeps loading. Team goals continue to mirror in as goal-tags with
-a `teamGoalId`.
+task already linked to a goal. In the task form a task takes **one primary
+goal** (single-select) plus any number of plain tags — both are still stored
+together in `activity.tags`, so storage is unchanged and existing data keeps
+loading (a legacy task with several goal-tags shows its first as primary and
+collapses to that one only if you re-save it). Team goals continue to mirror in
+as goal-tags with a `teamGoalId`.
+
+**Goals on the dial.** The Chronodo dial shows individual tasks *and* goals
+that still have unfinished tasks today. Goals are derived UI objects (from goal
+tags + activities) — never stored as activities. Opening a goal jumps straight
+to its one remaining task, or shows a small picker when several remain, where
+you stamp or time a child task. The goal itself is never stamped; it drops off
+the dial once all its tasks are stamped for the day, just like a finished task.
+The **No goal** bucket is not a dial item.
 
 ## Stamping past dates
 
