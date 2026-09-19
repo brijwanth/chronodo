@@ -2,6 +2,7 @@ import * as db from './storage.js';
 import * as stats from './stats.js';
 import * as timer from './timer.js';
 import * as sync from './sync.js';
+import * as notify from './notifications.js';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -1785,6 +1786,107 @@ function mountTeamPanel(container) {
   else renderJoinState();
 }
 
+// ---------------------------------------------------------------- reminder settings panel
+// Wires the Reminders block inside the Settings sheet. Every control writes
+// straight through to db.updateReminders so preferences persist immediately.
+function mountReminderPanel(sheet) {
+  const body = sheet.querySelector('#rm-body');
+  const enabled = sheet.querySelector('#rm-enabled');
+  enabled.onchange = () => {
+    db.updateReminders({ enabled: enabled.checked });
+    body.hidden = !enabled.checked;
+  };
+
+  sheet.querySelector('#rm-time').onchange = (e) => {
+    db.updateReminders({ time: e.target.value || '19:00' });
+  };
+  sheet.querySelector('#rm-unfinished').onchange = (e) => {
+    db.updateReminders({ onlyIfUnfinished: e.target.checked });
+  };
+  sheet.querySelector('#rm-quiet-start').onchange = (e) => {
+    db.updateReminders({ quietStart: e.target.value || '' });
+  };
+  sheet.querySelector('#rm-quiet-end').onchange = (e) => {
+    db.updateReminders({ quietEnd: e.target.value || '' });
+  };
+
+  // Day chips — at least one day must stay selected.
+  const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  const daysWrap = sheet.querySelector('#rm-days');
+  const chosen = new Set(db.getReminders().days || [0, 1, 2, 3, 4, 5, 6]);
+  function renderDays() {
+    daysWrap.innerHTML = '';
+    dayLabels.forEach((lbl, idx) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip-toggle' + (chosen.has(idx) ? ' is-on' : '');
+      chip.textContent = lbl;
+      chip.style.minWidth = '34px';
+      chip.onclick = () => {
+        if (chosen.has(idx)) {
+          if (chosen.size === 1) { toast('Pick at least one day'); return; }
+          chosen.delete(idx);
+        } else chosen.add(idx);
+        db.updateReminders({ days: Array.from(chosen).sort((a, b) => a - b) });
+        renderDays();
+      };
+      daysWrap.appendChild(chip);
+    });
+  }
+  renderDays();
+
+  // Notification permission + push status.
+  const permEl = sheet.querySelector('#rm-perm');
+  const pushEl = sheet.querySelector('#rm-push');
+  const allowBtn = sheet.querySelector('#rm-allow');
+  const testBtn = sheet.querySelector('#rm-test');
+
+  function refreshPermission() {
+    const status = notify.permissionStatus();
+    const labels = {
+      granted: 'Notifications allowed on this device.',
+      denied: 'Notifications blocked — re-enable them in your browser or app settings.',
+      default: 'Notifications not enabled yet.',
+      unsupported: 'This browser doesn’t support notifications.',
+    };
+    permEl.textContent = labels[status] || labels.default;
+    allowBtn.style.display = (status === 'default') ? '' : 'none';
+    testBtn.style.display = (status === 'granted') ? '' : 'none';
+    pushEl.textContent = notify.pushStatusMessage();
+  }
+  refreshPermission();
+
+  // Permission is only ever requested from this click, never on load.
+  allowBtn.onclick = async () => {
+    allowBtn.disabled = true;
+    const status = await notify.requestPermission();
+    refreshPermission();
+    allowBtn.disabled = false;
+    if (status === 'granted') {
+      toast('Notifications enabled');
+      if (notify.isPushConfigured()) {
+        const result = await notify.initMessaging();
+        pushEl.textContent = result.ok
+          ? 'Push token registered on this device. Sending scheduled reminders still needs a backend.'
+          : notify.pushStatusMessage();
+      }
+    } else if (status === 'denied') {
+      toast('Notifications blocked');
+    }
+  };
+
+  testBtn.onclick = async () => {
+    const pending = unfinishedTodayCount();
+    const shown = await notify.showLocalNotification(
+      'Chronodo',
+      pending > 0
+        ? `${pending} task${pending === 1 ? '' : 's'} still unstamped today.`
+        : 'This is a test reminder — everything is stamped today.'
+    );
+    toast(shown ? 'Test notification sent' : 'Could not show a notification here');
+  };
+}
+
 // ---------------------------------------------------------------- settings
 function openSettings() {
   const s = db.getSettings();
@@ -1809,6 +1911,45 @@ function openSettings() {
       <label>Team sync (beta)</label>
       <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Share select tasks and goals with a small team. Stamps sync in real time.</p>
       <div id="team-panel"></div>
+    </div>
+    <div class="field" style="margin-top:20px;">
+      <label>Reminders</label>
+      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">A nudge to come back and stamp your day. Runs on this device from your own data — shown when you open Chronodo.</p>
+      <div class="switch-row">
+        <div><div>Daily reminder</div><div style="font-size:11px;opacity:.6;">Off by default</div></div>
+        <label class="switch"><input type="checkbox" id="rm-enabled" ${s.reminders.enabled ? 'checked' : ''}><span class="switch__track"></span></label>
+      </div>
+      <div id="rm-body" ${s.reminders.enabled ? '' : 'hidden'}>
+        <div class="field" style="margin-top:12px;">
+          <label>Remind me at</label>
+          <input type="time" id="rm-time" value="${s.reminders.time || '19:00'}">
+        </div>
+        <div class="field">
+          <label>Days</label>
+          <div class="chip-toggle-group" id="rm-days"></div>
+        </div>
+        <div class="switch-row">
+          <div><div>Only if tasks are unfinished</div><div style="font-size:11px;opacity:.6;">Stay quiet on days you finish everything</div></div>
+          <label class="switch"><input type="checkbox" id="rm-unfinished" ${s.reminders.onlyIfUnfinished ? 'checked' : ''}><span class="switch__track"></span></label>
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label>Quiet hours (optional)</label>
+          <div class="field-row">
+            <input type="time" id="rm-quiet-start" value="${s.reminders.quietStart || ''}">
+            <input type="time" id="rm-quiet-end" value="${s.reminders.quietEnd || ''}">
+          </div>
+          <p style="font-size:11px;opacity:.55;margin-top:6px;">No reminder between these times. Leave both blank to switch off.</p>
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label>Notifications</label>
+          <div id="rm-perm" class="team-status"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+            <button class="btn btn--ghost" id="rm-allow" style="border-color:#067647;color:#067647;">Enable notifications</button>
+            <button class="btn btn--text" id="rm-test">Send test reminder</button>
+          </div>
+          <div id="rm-push" style="font-size:11px;opacity:.6;margin-top:10px;line-height:1.6;"></div>
+        </div>
+      </div>
     </div>
     <div class="field" style="margin-top:20px;">
       <label>Import tasks from CSV</label>
@@ -1858,6 +1999,7 @@ function openSettings() {
       sheet.querySelectorAll('input[name="s-reco"]').forEach(r => {
         r.onchange = () => { db.updateSettings({ recommendationPref: r.value }); viewState.recoMode = r.value; };
       });
+      mountReminderPanel(sheet);
       mountTeamPanel(sheet.querySelector('#team-panel'));
       const csvInput = sheet.querySelector('#s-csv');
       const csvStatus = sheet.querySelector('#s-csv-status');
@@ -2165,7 +2307,116 @@ function showWelcome() {
   };
 }
 
+// ---------------------------------------------------------------- reminders
+// In-app reminders run entirely off local data: when Chronodo opens or comes
+// back to the foreground we check the saved preferences and, at most once per
+// day, show a banner. Nothing here can fire while the app is closed — that
+// needs web push plus a backend scheduler (see README).
+const REMINDER_LAST_KEY = 'chronodo-reminder-last-v1';
+
+function reminderShownToday() {
+  try { return localStorage.getItem(REMINDER_LAST_KEY) === db.todayStr(); }
+  catch (e) { return false; }
+}
+function markReminderShown() {
+  try { localStorage.setItem(REMINDER_LAST_KEY, db.todayStr()); } catch (e) { /* private mode */ }
+}
+
+function hhmmToMinutes(value) {
+  const [h, m] = String(value || '').split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+// Quiet hours suppress the reminder. A range that ends before it starts
+// (e.g. 22:00 → 07:00) wraps past midnight.
+function inQuietHours(reminders, now) {
+  const start = hhmmToMinutes(reminders.quietStart);
+  const end = hhmmToMinutes(reminders.quietEnd);
+  if (start === null || end === null || start === end) return false;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  return start < end ? (mins >= start && mins < end) : (mins >= start || mins < end);
+}
+
+// Tasks still runnable today — the same "not stamped today" rule the dial uses.
+// A goal counts as unfinished when it still has unfinished child tasks, which
+// is implied by counting those tasks directly.
+function unfinishedTodayCount() {
+  const today = db.todayStr();
+  return db.getActivities().filter(a => !db.isDoneOn(a, today)).length;
+}
+
+function maybeShowReminder() {
+  const r = db.getReminders();
+  if (!r || !r.enabled) return;
+  if (timer.isRunning()) return;                       // never interrupt a session
+  if (document.getElementById('reminder-banner')) return;
+  if (reminderShownToday()) return;
+  const now = new Date();
+  if (!Array.isArray(r.days) || !r.days.includes(now.getDay())) return;
+  const due = hhmmToMinutes(r.time);
+  if (due === null || now.getHours() * 60 + now.getMinutes() < due) return;
+  if (inQuietHours(r, now)) return;
+  const pending = unfinishedTodayCount();
+  if (r.onlyIfUnfinished && pending === 0) return;
+  markReminderShown();
+  showReminderBanner(pending);
+}
+
+function showReminderBanner(pending) {
+  const existing = document.getElementById('reminder-banner');
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.className = 'reminder-banner';
+  banner.id = 'reminder-banner';
+  banner.setAttribute('role', 'status');
+  const msg = pending > 0
+    ? `${pending} task${pending === 1 ? '' : 's'} still unstamped today.`
+    : 'Time for your daily check-in.';
+  banner.innerHTML = `
+    <div class="reminder-banner__body">
+      <div class="reminder-banner__title">Chronodo reminder</div>
+      <div class="reminder-banner__msg"></div>
+    </div>
+    <div class="reminder-banner__actions">
+      <button class="btn btn--stamp btn--sm" id="reminder-open">Open Chronodo</button>
+      <button class="btn btn--text btn--sm" id="reminder-dismiss">Dismiss</button>
+    </div>`;
+  banner.querySelector('.reminder-banner__msg').textContent = msg;
+  document.body.appendChild(banner);
+  banner.querySelector('#reminder-dismiss').onclick = () => banner.remove();
+  banner.querySelector('#reminder-open').onclick = () => {
+    banner.remove();
+    viewState.view = 'rolodex';
+    viewState.rolodexIndex = 0;
+    tabs.forEach(t => {
+      const on = t.dataset.view === 'rolodex';
+      t.classList.toggle('is-active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    document.getElementById('brand-view').textContent = viewLabels.rolodex;
+    render();
+  };
+}
+
+// A push that lands while Chronodo is open is shown as the same in-app banner
+// rather than an OS notification, which browsers suppress in the foreground.
+notify.onForegroundMessage(() => {
+  if (document.getElementById('reminder-banner')) return;
+  showReminderBanner(unfinishedTodayCount());
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') maybeShowReminder();
+});
+
 render();
 watchTeamActivities();
 watchTeamGoals();
 if (!localStorage.getItem('chronodo-welcomed')) showWelcome();
+maybeShowReminder();
+// If push was already set up on a previous visit, re-register quietly so the
+// token stays fresh. No-ops (and never throws) until a VAPID key is configured.
+if (notify.permissionStatus() === 'granted' && notify.isPushConfigured()) {
+  notify.initMessaging();
+}
