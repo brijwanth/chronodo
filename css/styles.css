@@ -486,6 +486,100 @@ button { font-family: inherit; }
   color: var(--color-brass);
   margin: 18px 0 10px;
 }
+.goals-intro {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-ink-soft);
+  margin: 4px 0 4px;
+}
+
+/* A goal and the tasks filed under it */
+.goal-group {
+  background: var(--color-card);
+  border: 1px solid rgba(0,0,0,0.08);
+  border-left: 4px solid var(--color-sage-dark);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.14);
+}
+.goal-group--nogoal { border-left-color: var(--color-brass-dark); }
+.goal-group__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.goal-group__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--color-ink);
+}
+.goal-group__star { color: var(--color-sage-dark); }
+.goal-group__count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--color-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.goal-group__tasks { display: flex; flex-direction: column; gap: 6px; }
+.goal-group__empty { font-size: 12px; opacity: 0.6; color: var(--color-ink-soft); margin: 2px 0; }
+.goal-group__actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+
+.goal-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-card-alt);
+}
+.goal-task__stamp {
+  width: 22px; height: 22px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--color-ink);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.goal-task__stamp.is-done { background: #0e9f6e; border-color: #067647; }
+.goal-task__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.goal-task__name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-task__team {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 100px;
+  background: var(--color-brass-dark);
+  color: var(--color-ink);
+}
+
 .taglist { display: flex; flex-direction: column; gap: 10px; }
 .tag-card {
   display: flex;
@@ -610,6 +704,15 @@ button { font-family: inherit; }
 
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-bottom: 6px; }
+.field-hint { text-transform: none; letter-spacing: 0; font-weight: 400; opacity: 0.75; }
+/* Visually separate Goal selection from Tag selection in the task form */
+.form-goalbox, .form-tagbox {
+  padding: 12px 12px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.form-goalbox { background: rgba(14,159,110,0.10); border-color: rgba(14,159,110,0.35); }
+.form-tagbox { background: rgba(255,255,255,0.04); }
 .field input[type="text"], .field input[type="number"], .field select {
   width: 100%;
   background: var(--color-bg);
@@ -849,6 +952,49 @@ button { font-family: inherit; }
 .calview__done-dot { width: 12px; height: 12px; border-radius: 50%; background: #0e9f6e; flex: 0 0 auto; }
 .calview__done-name { flex: 1; min-width: 0; font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calview__done-meta { flex: 0 0 auto; font-size: 11px; color: var(--color-ink-soft); text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* Calendar "Stamp another task" flow */
+.cal-stamp { margin-top: 14px; }
+.cal-stamp__open { width: 100%; }
+.cal-stamp__panel {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--color-card);
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+.cal-stamp__panel[hidden] { display: none; }
+.cal-stamp__label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-ink-soft);
+}
+.cal-stamp__select, .cal-stamp__label input, .cal-stamp__label textarea {
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-ink);
+  background: rgba(0,0,0,0.03);
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.cal-stamp__label textarea { resize: vertical; line-height: 1.5; }
+.cal-stamp__select:focus, .cal-stamp__label input:focus, .cal-stamp__label textarea:focus {
+  outline: none; border-color: var(--color-brass); background: #fff;
+}
+.cal-stamp__row { display: flex; gap: 10px; }
+.cal-stamp__row .cal-stamp__label { flex: 1; }
+.cal-stamp__actions { display: flex; align-items: center; gap: 12px; }
+.cal-stamp__actions .btn.is-unstamp { background: var(--color-rust); }
+.cal-stamp__state { font-size: 11px; color: var(--color-ink-soft); }
 
 .cal-export {
   margin-top: 24px;

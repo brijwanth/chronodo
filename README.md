@@ -18,6 +18,32 @@ arrow keys, or the arrows below. Tap a name on the rim to jump straight to it.
 Markup and label geometry live in `renderRolodex()` (js/app.js); the dial
 face, ticks and pointer are the `.watch-dial` block in css/styles.css.
 
+## Goals, tasks & tags
+
+The model has three levels, all backed by the same storage:
+
+- **Task** — the thing you do, stamp, and time. Stored in `db.activities`.
+- **Goal** — a larger outcome you're working toward. Stored as a tag with
+  `isGoal === true`; a task belongs to a goal when its `tags` array includes
+  that goal's id.
+- **Tag** — a lightweight label for filtering. A tag with `isGoal === false`.
+
+The **Goals & Tags** view lists each goal with the tasks filed under it, a
+**No goal** bucket for tasks with no goal, and a quick action to create a new
+task already linked to a goal. The task form separates Goal selection from Tag
+selection, but both still write to `activity.tags`, so storage is unchanged and
+existing data keeps loading. Team goals continue to mirror in as goal-tags with
+a `teamGoalId`.
+
+## Stamping past dates
+
+Every stamp takes an explicit date, so you're not limited to today. In the
+**Calendar** view, pick any day and use **Stamp another task** to stamp an
+existing task on that date with optional minutes and a note — or unstamp it if
+it's already stamped that day. Personal tasks go through `db.markDone` /
+`db.unmarkDone`; shared team tasks route through `sync.js` and mirror into the
+local log. The per-task detail calendar can also toggle any date directly.
+
 ## File map
 
 ```

@@ -165,7 +165,7 @@ topUpMore();
 const navPanel = document.getElementById('nav-panel');
 const navScrim = document.getElementById('nav-scrim');
 const btnMenu = document.getElementById('btn-menu');
-const viewLabels = { rolodex: 'Chronodo', list: 'List', calendar: 'Calendar', tags: 'Tags', recommend: 'Suggested' };
+const viewLabels = { rolodex: 'Chronodo', list: 'List', calendar: 'Calendar', tags: 'Goals & Tags', recommend: 'Suggested' };
 
 function openMenu() {
   navPanel.classList.add('is-open');
@@ -633,6 +633,26 @@ function exportNotes(from, to, taskId = '') {
   if (!dates.length) toast('No notes in this range');
 }
 
+// Stamp/unstamp a task on a given date from the Calendar view, routing team
+// tasks through sync.js (last-write-wins) and personal tasks through storage.
+// Returns a promise so callers can refresh once the write lands.
+async function stampTaskOn(activity, dateStr, { seconds = 0, note = '' } = {}) {
+  if (activity.teamId) {
+    await sync.markTeamActivityDone(activity.teamId, activity.teamActivityId, dateStr, { seconds, note });
+    setLocalLog(activity, dateStr, { done: true, source: 'manual', seconds, note, by: sync.getUid() });
+  } else {
+    db.markDone(activity.id, { source: 'manual', seconds, note, date: dateStr });
+  }
+}
+async function unstampTaskOn(activity, dateStr) {
+  if (activity.teamId) {
+    await sync.unmarkTeamActivityDone(activity.teamId, activity.teamActivityId, dateStr);
+    db.unmarkDone(activity.id, dateStr);
+  } else {
+    db.unmarkDone(activity.id, dateStr);
+  }
+}
+
 function renderCalDay(container) {
   const dateStr = viewState.calSelected;
   const parts = dateStr.split('-').map(Number);
@@ -642,34 +662,178 @@ function renderCalDay(container) {
   const done = activitiesDoneOn(dateStr);
   const heading = `${dayNames[dObj.getDay()]}, ${monthShort[dObj.getMonth()]} ${dObj.getDate()}`;
   container.innerHTML = `<div class="calview__day-head"><span>${heading}</span><span class="calview__day-count">${done.length} accomplished</span></div>`;
+
   if (done.length === 0) {
     const p = document.createElement('p');
     p.className = 'calview__day-empty';
     p.textContent = 'Nothing stamped this day.';
     container.appendChild(p);
-    return;
+  } else {
+    const listEl = document.createElement('div');
+    listEl.className = 'calview__day-list';
+    done.forEach(a => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'calview__done-row';
+      const log = a.logs[dateStr];
+      const mins = log && log.seconds ? Math.round(log.seconds / 60) : 0;
+      const meta = mins > 0 ? `${mins} min` : (log && log.source === 'timer' ? 'timed' : 'stamped');
+      const noteHtml = log && log.note ? `<span class="calview__done-note">${log.note.replace(/</g,'&lt;')}</span>` : '';
+      row.innerHTML = `<span class="calview__done-dot"></span><span class="calview__done-main"><span class="calview__done-name">${a.name}</span>${noteHtml}</span><span class="calview__done-meta">${meta}</span>`;
+      row.onclick = () => openDetail(a.id);
+      listEl.appendChild(row);
+    });
+    container.appendChild(listEl);
   }
-  const listEl = document.createElement('div');
-  listEl.className = 'calview__day-list';
-  done.forEach(a => {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'calview__done-row';
-    const log = a.logs[dateStr];
-    const mins = log && log.seconds ? Math.round(log.seconds / 60) : 0;
-    const meta = mins > 0 ? `${mins} min` : (log && log.source === 'timer' ? 'timed' : 'stamped');
-    const noteHtml = log && log.note ? `<span class="calview__done-note">${log.note.replace(/</g,'&lt;')}</span>` : '';
-    row.innerHTML = `<span class="calview__done-dot"></span><span class="calview__done-main"><span class="calview__done-name">${a.name}</span>${noteHtml}</span><span class="calview__done-meta">${meta}</span>`;
-    row.onclick = () => openDetail(a.id);
-    listEl.appendChild(row);
-  });
-  container.appendChild(listEl);
+
+  renderCalStamper(container, dateStr);
 }
 
-// ---------------------------------------------------------------- tags & goals view
+// "Stamp another task" flow for the selected calendar date: pick any existing
+// task, optionally add minutes and a note, and stamp it on that date — or
+// unstamp it if it's already stamped that day. Works for past, present, or
+// future dates since db.markDone/unmarkDone take an explicit date.
+function renderCalStamper(container, dateStr) {
+  const acts = db.getActivities();
+  const wrap = document.createElement('div');
+  wrap.className = 'cal-stamp';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'btn btn--stamp cal-stamp__open';
+  toggleBtn.textContent = '+ Stamp another task';
+  wrap.appendChild(toggleBtn);
+
+  const panel = document.createElement('div');
+  panel.className = 'cal-stamp__panel';
+  panel.hidden = true;
+  if (acts.length === 0) {
+    panel.innerHTML = '<p class="calview__day-empty">No tasks yet — create one first.</p>';
+  } else {
+    panel.innerHTML = `
+      <label class="cal-stamp__label">Task
+        <select class="cal-stamp__select" id="cst-task">
+          ${acts.map(a => `<option value="${a.id}">${a.name.replace(/</g,'&lt;')}${a.teamId ? ' (team)' : ''}</option>`).join('')}
+        </select>
+      </label>
+      <div class="cal-stamp__row">
+        <label class="cal-stamp__label">Minutes (optional)
+          <input type="number" id="cst-mins" min="0" max="600" placeholder="0">
+        </label>
+      </div>
+      <label class="cal-stamp__label">Note (optional)
+        <textarea id="cst-note" rows="2" placeholder="What you did, how it went…"></textarea>
+      </label>
+      <div class="cal-stamp__actions">
+        <button class="btn btn--primary" id="cst-save">Stamp</button>
+        <span class="cal-stamp__state" id="cst-state"></span>
+      </div>`;
+  }
+  wrap.appendChild(panel);
+  container.appendChild(wrap);
+
+  toggleBtn.onclick = () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) syncPanelToTask();
+  };
+
+  if (acts.length === 0) return;
+
+  const selectEl = panel.querySelector('#cst-task');
+  const minsEl = panel.querySelector('#cst-mins');
+  const noteEl = panel.querySelector('#cst-note');
+  const saveEl = panel.querySelector('#cst-save');
+  const stateEl = panel.querySelector('#cst-state');
+
+  function currentTask() { return db.getActivity(selectEl.value); }
+
+  // Reflect whether the chosen task is already stamped this day: prefill its
+  // minutes/note and flip the button to Stamp vs. Unstamp.
+  function syncPanelToTask() {
+    const a = currentTask();
+    if (!a) return;
+    const log = a.logs[dateStr];
+    const isDone = !!(log && log.done);
+    if (isDone) {
+      minsEl.value = log.seconds ? Math.round(log.seconds / 60) : '';
+      noteEl.value = log.note || '';
+      saveEl.textContent = 'Unstamp';
+      saveEl.classList.add('is-unstamp');
+      stateEl.textContent = 'Already stamped this day';
+    } else {
+      minsEl.value = '';
+      noteEl.value = '';
+      saveEl.textContent = 'Stamp';
+      saveEl.classList.remove('is-unstamp');
+      stateEl.textContent = '';
+    }
+  }
+  selectEl.onchange = syncPanelToTask;
+  syncPanelToTask();
+
+  saveEl.onclick = async () => {
+    const a = currentTask();
+    if (!a) return;
+    const isDone = db.isDoneOn(a, dateStr);
+    saveEl.disabled = true;
+    try {
+      if (isDone) {
+        await unstampTaskOn(a, dateStr);
+        toast(a.teamId ? 'Unstamped for the team' : 'Unstamped');
+      } else {
+        const mins = Math.max(0, parseInt(minsEl.value, 10) || 0);
+        const note = noteEl.value.trim();
+        await stampTaskOn(a, dateStr, { seconds: mins * 60, note });
+        toast(a.teamId ? 'Stamped for the team' : 'Stamped');
+      }
+    } catch (err) {
+      toast(err.message || 'Could not sync — try again');
+      saveEl.disabled = false;
+      return;
+    }
+    render();
+  };
+}
+
+// ---------------------------------------------------------------- goals & tags view
+// A goal is a tag with isGoal === true; a task belongs to a goal when its
+// tags include that goal's id. "No goal" collects tasks with no goal tag.
+function activityGoalObjs(activity) {
+  return activityTagObjs(activity).filter(t => t.isGoal);
+}
+
+function jumpToTagFilter(tagId) {
+  viewState.activeTagFilter = tagId;
+  viewState.view = 'list';
+  tabs.forEach(t => { t.classList.toggle('is-active', t.dataset.view === 'list'); t.setAttribute('aria-selected', t.dataset.view === 'list' ? 'true' : 'false'); });
+  document.getElementById('brand-view').textContent = viewLabels.list;
+  render();
+}
+
+// A compact, tappable task row used under a goal (and under "No goal").
+function buildGoalTaskRow(activity) {
+  const row = document.createElement('div');
+  row.className = 'goal-task';
+  const doneToday = db.isDoneOn(activity, db.todayStr());
+  const stamp = document.createElement('button');
+  stamp.type = 'button';
+  stamp.className = 'goal-task__stamp' + (doneToday ? ' is-done' : '');
+  stamp.title = doneToday ? 'Stamped today' : 'Stamp today';
+  stamp.setAttribute('aria-label', doneToday ? 'Unstamp today' : 'Stamp today');
+  stamp.onclick = (e) => { e.stopPropagation(); toggleDone(activity); };
+  const body = document.createElement('div');
+  body.className = 'goal-task__body';
+  const teamMark = activity.teamId ? '<span class="goal-task__team">Team</span>' : '';
+  body.innerHTML = `<span class="goal-task__name">${activity.name.replace(/</g, '&lt;')}</span>${teamMark}`;
+  body.onclick = () => openDetail(activity.id);
+  row.appendChild(stamp);
+  row.appendChild(body);
+  return row;
+}
+
 function renderTags() {
   const goals = db.getGoals();
   const plainTags = db.getTags().filter(t => !t.isGoal);
+  const allActs = db.getActivities();
 
   const addRow = document.createElement('div');
   addRow.className = 'card__actions';
@@ -684,37 +848,123 @@ function renderTags() {
   addRow.appendChild(addGoalBtn); addRow.appendChild(addTagBtn);
   mainEl.appendChild(addRow);
 
-  const section = (title, list) => {
-    const h = document.createElement('div');
-    h.className = 'section-title';
-    h.textContent = title;
-    mainEl.appendChild(h);
-    const wrap = document.createElement('div');
-    wrap.className = 'taglist';
-    if (list.length === 0) {
+  const intro = document.createElement('p');
+  intro.className = 'goals-intro';
+  intro.textContent = 'Goals are the outcomes you\u2019re working toward; the tasks below each one are the things you do and stamp. Tags are lightweight labels.';
+  mainEl.appendChild(intro);
+
+  // ---- Goals: each goal with its tasks, plus a "No goal" bucket ----
+  const goalsHead = document.createElement('div');
+  goalsHead.className = 'section-title';
+  goalsHead.textContent = 'Goals';
+  mainEl.appendChild(goalsHead);
+
+  if (goals.length === 0) {
+    const p = document.createElement('p');
+    p.style.cssText = 'opacity:.6;font-size:12px;';
+    p.textContent = 'No goals yet \u2014 add one to group your tasks toward an outcome.';
+    mainEl.appendChild(p);
+  }
+
+  goals.forEach(goal => {
+    const tasks = allActs.filter(a => a.tags.includes(goal.id));
+    const group = document.createElement('div');
+    group.className = 'goal-group';
+    const head = document.createElement('div');
+    head.className = 'goal-group__head';
+    head.innerHTML = `
+      <div class="goal-group__title"><span class="goal-group__star">\u2605</span>${goal.name.replace(/</g, '&lt;')}${goal.teamGoalId ? '<span class="goal-task__team">Team</span>' : ''}</div>
+      <div class="goal-group__count">${tasks.length} task${tasks.length === 1 ? '' : 's'}</div>
+      <button class="tag-card__edit" data-act="edit">Edit</button>`;
+    head.querySelector('[data-act="edit"]').onclick = (e) => { e.stopPropagation(); openTagForm({ existing: goal }); };
+    group.appendChild(head);
+
+    const taskWrap = document.createElement('div');
+    taskWrap.className = 'goal-group__tasks';
+    if (tasks.length === 0) {
       const p = document.createElement('p');
-      p.style.cssText = 'opacity:.6;font-size:12px;';
-      p.textContent = 'None yet.';
-      wrap.appendChild(p);
+      p.className = 'goal-group__empty';
+      p.textContent = 'No tasks under this goal yet.';
+      taskWrap.appendChild(p);
+    } else {
+      tasks.forEach(a => taskWrap.appendChild(buildGoalTaskRow(a)));
     }
-    list.forEach(tag => {
-      const count = db.getActivities().filter(a => a.tags.includes(tag.id)).length;
-      const card = document.createElement('div');
-      card.className = 'tag-card' + (tag.isGoal ? ' is-goal' : '');
-      card.innerHTML = `<div class="tag-card__body"><div class="tag-card__name">${tag.isGoal ? '\u2605 ' : '#'}${tag.name}</div><div class="tag-card__count">${count} activit${count === 1 ? 'y' : 'ies'}</div></div><button class="tag-card__edit" aria-label="Edit">Edit</button>`;
-      card.querySelector('.tag-card__body').onclick = () => {
-        viewState.activeTagFilter = tag.id;
-        viewState.view = 'list';
-        tabs.forEach(t => { t.classList.toggle('is-active', t.dataset.view === 'list'); t.setAttribute('aria-selected', t.dataset.view === 'list' ? 'true' : 'false'); });
-        render();
-      };
-      card.querySelector('.tag-card__edit').onclick = (e) => { e.stopPropagation(); openTagForm({ existing: tag }); };
-      wrap.appendChild(card);
-    });
-    mainEl.appendChild(wrap);
-  };
-  section('Goals', goals);
-  section('Tags', plainTags);
+    group.appendChild(taskWrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'goal-group__actions';
+    const newTask = document.createElement('button');
+    newTask.className = 'btn btn--ghost btn--sm';
+    newTask.style.cssText = 'border-color:#067647;color:#067647;';
+    newTask.textContent = '+ New task in this goal';
+    newTask.onclick = () => openActivityForm(null, { presetGoalId: goal.id });
+    actions.appendChild(newTask);
+    if (tasks.length) {
+      const viewAll = document.createElement('button');
+      viewAll.className = 'btn btn--text btn--sm';
+      viewAll.textContent = 'View in list \u203a';
+      viewAll.onclick = () => jumpToTagFilter(goal.id);
+      actions.appendChild(viewAll);
+    }
+    group.appendChild(actions);
+    mainEl.appendChild(group);
+  });
+
+  // "No goal" bucket \u2014 tasks with no goal tag at all.
+  const orphanTasks = allActs.filter(a => activityGoalObjs(a).length === 0);
+  const orphanGroup = document.createElement('div');
+  orphanGroup.className = 'goal-group goal-group--nogoal';
+  const orphanHead = document.createElement('div');
+  orphanHead.className = 'goal-group__head';
+  orphanHead.innerHTML = `
+    <div class="goal-group__title">No goal</div>
+    <div class="goal-group__count">${orphanTasks.length} task${orphanTasks.length === 1 ? '' : 's'}</div>`;
+  orphanGroup.appendChild(orphanHead);
+  const orphanWrap = document.createElement('div');
+  orphanWrap.className = 'goal-group__tasks';
+  if (orphanTasks.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'goal-group__empty';
+    p.textContent = 'Every task is linked to a goal.';
+    orphanWrap.appendChild(p);
+  } else {
+    orphanTasks.forEach(a => orphanWrap.appendChild(buildGoalTaskRow(a)));
+  }
+  orphanGroup.appendChild(orphanWrap);
+  const orphanActions = document.createElement('div');
+  orphanActions.className = 'goal-group__actions';
+  const newLoose = document.createElement('button');
+  newLoose.className = 'btn btn--ghost btn--sm';
+  newLoose.style.cssText = 'border-color:#067647;color:#067647;';
+  newLoose.textContent = '+ New task';
+  newLoose.onclick = () => openActivityForm();
+  orphanActions.appendChild(newLoose);
+  orphanGroup.appendChild(orphanActions);
+  mainEl.appendChild(orphanGroup);
+
+  // ---- Tags: lightweight labels, as compact cards ----
+  const tagsHead = document.createElement('div');
+  tagsHead.className = 'section-title';
+  tagsHead.textContent = 'Tags';
+  mainEl.appendChild(tagsHead);
+  const tagWrap = document.createElement('div');
+  tagWrap.className = 'taglist';
+  if (plainTags.length === 0) {
+    const p = document.createElement('p');
+    p.style.cssText = 'opacity:.6;font-size:12px;';
+    p.textContent = 'None yet.';
+    tagWrap.appendChild(p);
+  }
+  plainTags.forEach(tag => {
+    const count = allActs.filter(a => a.tags.includes(tag.id)).length;
+    const card = document.createElement('div');
+    card.className = 'tag-card';
+    card.innerHTML = `<div class="tag-card__body"><div class="tag-card__name">#${tag.name.replace(/</g, '&lt;')}</div><div class="tag-card__count">${count} task${count === 1 ? '' : 's'}</div></div><button class="tag-card__edit" aria-label="Edit">Edit</button>`;
+    card.querySelector('.tag-card__body').onclick = () => jumpToTagFilter(tag.id);
+    card.querySelector('.tag-card__edit').onclick = (e) => { e.stopPropagation(); openTagForm({ existing: tag }); };
+    tagWrap.appendChild(card);
+  });
+  mainEl.appendChild(tagWrap);
 }
 
 // ---------------------------------------------------------------- recommend view
@@ -902,7 +1152,7 @@ function openDetail(activityId) {
       ${!activity.teamId && sync.getLocalTeam() ? '<button class="btn btn--ghost" id="detail-share-team" style="border-color:#067647;color:#067647;">Share with team</button>' : ''}
       ${activity.teamId ? '<button class="btn btn--ghost" id="detail-unshare-team">Unshare (keep for me)</button>' : ''}
       <button class="btn btn--ghost" id="detail-edit">Edit</button>
-      <button class="btn btn--text" id="detail-delete" style="color:#a8432d;">Delete card</button>
+      <button class="btn btn--text" id="detail-delete" style="color:#a8432d;">Delete task</button>
     </div>
   `, {
     fullscreen: true,
@@ -1081,26 +1331,34 @@ function openDetail(activityId) {
 }
 
 // ---------------------------------------------------------------- add/edit activity form
-function openActivityForm(existing = null) {
-  const allTags = db.getTags();
+// presetGoalId (optional): preselect a goal when creating a new task from the
+// Goals & Tags view's "New task in this goal" quick action.
+function openActivityForm(existing = null, { presetGoalId = null } = {}) {
   const selected = new Set(existing ? existing.tags : []);
+  if (!existing && presetGoalId && db.getTags().some(t => t.id === presetGoalId && t.isGoal)) {
+    selected.add(presetGoalId);
+  }
   openSheet(`
     <div class="sheet__head">
-      <h2 class="sheet__title">${existing ? 'Edit card' : 'New card'}</h2>
+      <h2 class="sheet__title">${existing ? 'Edit task' : 'New task'}</h2>
       <button class="sheet__close" aria-label="Close">&times;</button>
     </div>
     <div class="field">
-      <label>Activity name</label>
+      <label>Task name</label>
       <input type="text" id="f-name" placeholder="e.g. Read 20 pages" value="${existing ? existing.name.replace(/"/g,'&quot;') : ''}">
     </div>
-    <div class="field">
-      <label>Tags &amp; goals</label>
+    <div class="field form-goalbox">
+      <label>Goal <span class="field-hint">the larger outcome this task works toward</span></label>
+      <div class="chip-toggle-group" id="f-goals"></div>
+    </div>
+    <div class="field form-tagbox">
+      <label>Tags <span class="field-hint">lightweight labels for filtering</span></label>
       <div class="chip-toggle-group" id="f-tags"></div>
     </div>
     <div class="field">
       <label>New tag or goal (optional)</label>
       <div class="field-row">
-        <input type="text" id="f-newtag" placeholder="Tag name">
+        <input type="text" id="f-newtag" placeholder="Name">
         <select id="f-newtag-type" style="max-width:120px;">
           <option value="tag">Tag</option>
           <option value="goal">Goal</option>
@@ -1141,32 +1399,46 @@ function openActivityForm(existing = null) {
         ${db.getTags().filter(t => t.teamGoalId).map(t => `<option value="${t.teamGoalId}">${t.name.replace(/</g,'&lt;')}</option>`).join('')}
       </select>
     </div>` : ''}
-    <button class="btn btn--primary btn--full" id="f-save" style="margin-top:6px;">${existing ? 'Save changes' : 'File this card'}</button>
+    <button class="btn btn--primary btn--full" id="f-save" style="margin-top:6px;">${existing ? 'Save changes' : 'Create task'}</button>
   `, {
     onMount: (sheet) => {
       sheet.querySelector('.sheet__close').onclick = closeSheet;
+      const goalWrap = sheet.querySelector('#f-goals');
       const tagWrap = sheet.querySelector('#f-tags');
-      function renderTagChips() {
-        tagWrap.innerHTML = '';
-        db.getTags().forEach(tag => {
+      function renderChips() {
+        const goals = db.getGoals();
+        const plainTags = db.getTags().filter(t => !t.isGoal);
+        const buildChip = (tag, prefix) => {
           const chip = document.createElement('button');
           chip.type = 'button';
           chip.className = 'chip-toggle' + (selected.has(tag.id) ? ' is-on' : '');
-          chip.textContent = (tag.isGoal ? '\u2605 ' : '#') + tag.name;
+          chip.textContent = prefix + tag.name;
           chip.onclick = () => {
             if (selected.has(tag.id)) selected.delete(tag.id); else selected.add(tag.id);
-            renderTagChips();
+            renderChips();
           };
-          tagWrap.appendChild(chip);
-        });
-        if (allTags.length === 0 && db.getTags().length === 0) {
+          return chip;
+        };
+        goalWrap.innerHTML = '';
+        if (goals.length === 0) {
+          const p = document.createElement('p');
+          p.style.cssText = 'opacity:.6;font-size:12px;';
+          p.textContent = 'No goals yet \u2014 add one below.';
+          goalWrap.appendChild(p);
+        } else {
+          goals.forEach(g => goalWrap.appendChild(buildChip(g, '\u2605 ')));
+        }
+        tagWrap.innerHTML = '';
+        if (plainTags.length === 0) {
           const p = document.createElement('p');
           p.style.cssText = 'opacity:.6;font-size:12px;';
           p.textContent = 'No tags yet — add one below.';
           tagWrap.appendChild(p);
+        } else {
+          plainTags.forEach(t => tagWrap.appendChild(buildChip(t, '#')));
         }
       }
-      renderTagChips();
+      renderChips();
 
       // Frequency: preferred-day chips (default all days = daily)
       const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -1197,7 +1469,7 @@ function openActivityForm(existing = null) {
         const tag = db.createTag({ name, isGoal });
         selected.add(tag.id);
         nameInput.value = '';
-        renderTagChips();
+        renderChips();
       };
 
       sheet.querySelectorAll('input[name="f-timertype"]').forEach(r => {
@@ -1244,7 +1516,7 @@ function openActivityForm(existing = null) {
         else db.createActivity(payload);
         closeSheet();
         render();
-        toast(existing ? 'Card updated' : 'Card filed');
+        toast(existing ? 'Task updated' : 'Task created');
       };
     }
   });
