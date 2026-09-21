@@ -1164,4 +1164,6 @@ button { font-family: inherit; }
   border-radius: var(--radius-sm);
   margin-bottom: 6px;
 }
-.team-goal-row .btn { flex: 0 0 auto; margin-left: auto; }
+.team-goal-row .btn { flex: 0 0 auto; }
+.team-goal-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.team-goal-remove { color: #a8432d; }

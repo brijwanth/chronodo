@@ -1,4 +1,4 @@
-const CACHE = 'rolodex-v23';
+const CACHE = 'rolodex-v25';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -28,9 +28,8 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Cache-first for same-origin app assets; network-first (fallback to cache) for
-// cross-origin requests like Google Fonts, so the app still works offline once
-// fonts have been fetched once.
+// Network-first keeps installed phones current after a deployment. The cached
+// app shell remains the fallback when the device is offline.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
@@ -38,11 +37,16 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then((cached) => cached || fetch(req).then((res) => {
+      fetch(req).then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy));
         return res;
-      }).catch(() => caches.match('./index.html')))
+      }).catch(async () => {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        if (req.mode === 'navigate') return caches.match('./index.html');
+        throw new Error('Offline and resource is not cached');
+      })
     );
   } else {
     event.respondWith(

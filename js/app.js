@@ -5,8 +5,19 @@ import * as sync from './sync.js';
 import * as notify from './notifications.js';
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('./service-worker.js');
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+      await registration.update();
+    } catch (e) {
+      // Offline startup can still use the last installed app shell.
+    }
   });
 }
 
@@ -112,9 +123,22 @@ function watchTeamActivities() {
 let teamGoalsUnsub = null;
 function watchTeamGoals() {
   if (teamGoalsUnsub) { teamGoalsUnsub(); teamGoalsUnsub = null; }
-  teamGoalsUnsub = sync.subscribeToTeamGoals(({ code, goals }) => {
-    if (!code) return;
+  teamGoalsUnsub = sync.subscribeToTeamGoals(({ code, goals, error }) => {
+    if (!code || error) return;
     let changed = false;
+    const remoteGoalIds = new Set(goals.map((goal) => goal.id));
+    db.getGoals().filter((goal) => goal.teamGoalId && !remoteGoalIds.has(goal.teamGoalId)).forEach((goal) => {
+      db.getActivities().forEach((activity) => {
+        if (activity.teamGoalId === goal.teamGoalId) {
+          db.updateActivity(activity.id, {
+            teamGoalId: null,
+            tags: activity.tags.filter((tagId) => tagId !== goal.id),
+          });
+        }
+      });
+      db.deleteTag(goal.id);
+      changed = true;
+    });
     goals.forEach((remote) => {
       let goalTag = db.getTags().find((t) => t.teamGoalId === remote.id);
       if (!goalTag) {
@@ -991,7 +1015,7 @@ async function shareGoalWithTeam(goal) {
   return sharedTasks;
 }
 
-async function shareFullListWithTeam() {
+async function shareGoalsAndTasksWithTeam({ includeUngrouped = false } = {}) {
   const teamGoalIds = new Map();
   for (const goal of db.getGoals()) {
     teamGoalIds.set(goal.id, await ensureTeamGoalForLocalGoal(goal));
@@ -999,10 +1023,19 @@ async function shareFullListWithTeam() {
   let sharedTasks = 0;
   for (const task of db.getActivities()) {
     const goal = primaryGoalForActivity(task);
+    if (!goal && !includeUngrouped) continue;
     const teamGoalId = goal ? teamGoalIds.get(goal.id) || null : null;
     if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
   }
   return sharedTasks;
+}
+
+function shareAllGoalsWithTeam() {
+  return shareGoalsAndTasksWithTeam();
+}
+
+function shareFullListWithTeam() {
+  return shareGoalsAndTasksWithTeam({ includeUngrouped: true });
 }
 
 function openTeamShareChooser(activity) {
@@ -1897,7 +1930,7 @@ function mountTeamPanel(container) {
       return `<div class="team-member">${label}</div>`;
     }).join('');
     const teamGoals = db.getTags().filter((t) => t.teamGoalId);
-    const goalRows = teamGoals.map((g) => `<div class="team-goal-row"><span>${g.name.replace(/</g, '&lt;')}</span><button class="btn btn--text btn--sm" data-team-goal-edit="${g.id}">Edit</button></div>`).join('');
+    const goalRows = teamGoals.map((g) => `<div class="team-goal-row"><span>${g.name.replace(/</g, '&lt;')}</span><div class="team-goal-actions"><button class="btn btn--text btn--sm" data-team-goal-edit="${g.id}">Edit</button><button class="btn btn--text btn--sm team-goal-remove" data-team-goal-remove="${g.id}">Remove</button></div></div>`).join('');
     const localGoals = db.getGoals();
     const localGoalOptions = localGoals.map((g) => `<option value="${g.id}">${g.name.replace(/</g, '&lt;')}${g.teamGoalId ? ' (shared)' : ''}</option>`).join('');
     body.innerHTML = `
@@ -1919,7 +1952,8 @@ function mountTeamPanel(container) {
         </select>
         <button class="btn btn--ghost" id="team-share-goal" ${localGoals.length ? '' : 'disabled'}>Share goal</button>
       </div>
-      <button class="btn btn--stamp btn--full" id="team-share-all" style="margin-top:10px;">Share all goals &amp; tasks</button>
+      <button class="btn btn--stamp btn--full" id="team-share-goals" style="margin-top:10px;" ${localGoals.length ? '' : 'disabled'}>Share all existing goals</button>
+      <button class="btn btn--ghost btn--full" id="team-share-all" style="margin-top:8px;">Share full list</button>
       <div class="team-status" id="team-share-work-status"></div>
       <div class="section-title" style="margin:16px 0 8px;">Team goals</div>
       <p style="font-size:11px;opacity:.6;margin:-4px 0 10px;line-height:1.5;">Everyone can add goals here or edit a shared goal below.</p>
@@ -1937,9 +1971,11 @@ function mountTeamPanel(container) {
     body.querySelector('#team-new-task').onclick = () => openActivityForm(null, { shareWithTeam: true });
     const shareStatus = body.querySelector('#team-share-work-status');
     const shareGoalBtn = body.querySelector('#team-share-goal');
+    const shareGoalsBtn = body.querySelector('#team-share-goals');
     const shareAllBtn = body.querySelector('#team-share-all');
     const runShare = async (action, successMessage) => {
       shareGoalBtn.disabled = true;
+      shareGoalsBtn.disabled = true;
       shareAllBtn.disabled = true;
       shareStatus.textContent = 'Sharing...';
       try {
@@ -1950,6 +1986,7 @@ function mountTeamPanel(container) {
         shareStatus.style.color = '#a8432d';
         shareStatus.textContent = err.message || 'Could not share with team';
         shareGoalBtn.disabled = !localGoals.length;
+        shareGoalsBtn.disabled = !localGoals.length;
         shareAllBtn.disabled = false;
       }
     };
@@ -1957,7 +1994,8 @@ function mountTeamPanel(container) {
       const goal = db.getTags().find((tag) => tag.id === body.querySelector('#team-local-goal').value);
       if (goal) runShare(() => shareGoalWithTeam(goal), 'Goal and tasks shared');
     };
-    shareAllBtn.onclick = () => runShare(shareFullListWithTeam, 'All goals and tasks shared');
+    shareGoalsBtn.onclick = () => runShare(shareAllGoalsWithTeam, 'All existing goals shared');
+    shareAllBtn.onclick = () => runShare(shareFullListWithTeam, 'Full list shared');
     body.querySelector('#team-goal-add').onclick = async () => {
       const goalInput = body.querySelector('#team-goal-input');
       const name = goalInput.value.trim();
@@ -1974,6 +2012,20 @@ function mountTeamPanel(container) {
       button.onclick = () => {
         const goal = db.getTags().find((tag) => tag.id === button.dataset.teamGoalEdit);
         if (goal) openTagForm({ existing: goal });
+      };
+    });
+    body.querySelectorAll('[data-team-goal-remove]').forEach((button) => {
+      button.onclick = async () => {
+        const goal = db.getTags().find((tag) => tag.id === button.dataset.teamGoalRemove);
+        if (!goal || !confirm(`Remove "${goal.name}" from the team? Its shared cards and history will be kept without a goal.`)) return;
+        button.disabled = true;
+        try {
+          await sync.deleteTeamGoal(goal.teamGoalId);
+          toast('Team goal removed; its cards were kept');
+        } catch (err) {
+          button.disabled = false;
+          toast(err.message || 'Could not remove team goal');
+        }
       };
     });
     body.querySelector('#team-leave').onclick = async () => {
@@ -2045,7 +2097,10 @@ function mountTeamPanel(container) {
   }
 
   if (sync.getLocalTeam()) startLiveUpdates();
-  else renderJoinState();
+  else {
+    if (teamUnsub) { teamUnsub(); teamUnsub = null; }
+    renderJoinState();
+  }
 }
 
 // ---------------------------------------------------------------- reminder settings panel

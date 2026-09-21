@@ -5,8 +5,8 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js';
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField,
-  collection, addDoc, onSnapshot, serverTimestamp,
+  getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, deleteField,
+  collection, addDoc, onSnapshot, serverTimestamp, writeBatch,
 } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js';
 
 // Not a secret — Firebase's web config is meant to be public in client code.
@@ -308,6 +308,24 @@ async function updateTeamGoal(teamGoalId, name) {
   });
 }
 
+// Remove a shared goal without deleting its cards or their history. Cards that
+// belonged to it remain shared and become ungrouped for everyone in the room.
+async function deleteTeamGoal(teamGoalId) {
+  const team = loadLocalTeam();
+  if (!team || !teamGoalId) return;
+  await waitForAuth();
+  const activitiesRef = collection(dbFs, 'rooms', team.code, 'activities');
+  const activities = await getDocs(activitiesRef);
+  const batch = writeBatch(dbFs);
+  activities.docs.forEach((activity) => {
+    if (activity.data().teamGoalId === teamGoalId) {
+      batch.update(activity.ref, { teamGoalId: null });
+    }
+  });
+  batch.delete(doc(dbFs, 'rooms', team.code, 'goals', teamGoalId));
+  await batch.commit();
+}
+
 // Live list of the joined room's shared goals. Same calling convention as
 // subscribeToTeamActivities.
 function subscribeToTeamGoals(callback) {
@@ -322,7 +340,7 @@ function subscribeToTeamGoals(callback) {
     callback({ code: team.code, goals });
   }, (err) => {
     console.error('Team goals listener error', err);
-    callback({ code: team.code, goals: [] });
+    callback({ code: team.code, goals: [], error: true });
   });
 }
 // shared checkbox stamping. Whoever stamps a shared activity marks it done
@@ -356,5 +374,5 @@ export {
   createTeam, joinTeam, leaveTeam, getLocalTeam, subscribeToTeam, waitForAuth,
   createTeamActivity, updateTeamActivity, deleteTeamActivity, subscribeToTeamActivities,
   markTeamActivityDone, unmarkTeamActivityDone, getUid, ignoreTeamActivity,
-  getNickname, setNickname, createTeamGoal, updateTeamGoal, subscribeToTeamGoals,
+  getNickname, setNickname, createTeamGoal, updateTeamGoal, deleteTeamGoal, subscribeToTeamGoals,
 };
