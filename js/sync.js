@@ -213,7 +213,7 @@ function subscribeToTeam(callback) {
 // Create a shared activity in the joined room. Throws if not in a team.
 // `logs`, if given, seeds the shared doc's starting history — used when
 // converting an existing personal card so its past stamps carry over.
-async function createTeamActivity({ name, timerType, timerDuration, logs = {}, teamGoalId = null }) {
+async function createTeamActivity({ name, timerType, timerDuration, logs = {}, teamGoalId = null, sourceActivityId = null }) {
   const team = loadLocalTeam();
   if (!team) throw new Error('Join a team first.');
   const uid = await waitForAuth();
@@ -224,10 +224,20 @@ async function createTeamActivity({ name, timerType, timerDuration, logs = {}, t
     timerDuration,
     logs,
     teamGoalId,
+    sourceActivityId,
     createdBy: uid,
     createdAt: serverTimestamp(),
   });
   return { id: docRef.id, code: team.code };
+}
+
+// Attach an already-shared task to a team goal without creating a duplicate
+// activity. Used when a task was shared on its own before its goal was shared.
+async function setTeamActivityGoal(teamActivityId, teamGoalId) {
+  const team = loadLocalTeam();
+  if (!team || !teamActivityId) throw new Error('Join a team first.');
+  await waitForAuth();
+  await updateDoc(doc(dbFs, 'rooms', team.code, 'activities', teamActivityId), { teamGoalId });
 }
 
 // Remove a shared activity for everyone in the room. Safe to call when not
@@ -328,6 +338,7 @@ function getUid() {
 export {
   createTeam, joinTeam, leaveTeam, getLocalTeam, subscribeToTeam, waitForAuth,
   createTeamActivity, deleteTeamActivity, subscribeToTeamActivities,
+  setTeamActivityGoal,
   markTeamActivityDone, unmarkTeamActivityDone, getUid, ignoreTeamActivity,
   getNickname, setNickname, createTeamGoal, subscribeToTeamGoals,
 };

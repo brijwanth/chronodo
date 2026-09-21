@@ -1,7 +1,7 @@
-name,tags,note,timerType,timerMinutes
-Morning run,health;body,Easy 5k around the park,stopwatch,
-Guitar practice,craft;mind,Warm up with scales then work one song,countdown,25
-Meditate,health;mind,Focus on the breath; count to ten,countdown,10
-Read Sanskrit,study;mind,One page daily; note new words in the margin,countdown,20
-Cold shower,body,Two minutes; breathe slowly,stopwatch,
-Journal,mind,"Three lines: what went well, what to fix, one gratitude",stopwatch,
+name,goal,tags,note,timerType,timerMinutes
+Morning run,Get Healthier,health;body,Easy 5k around the park,stopwatch,
+Guitar practice,Learn Guitar,craft;mind,Warm up with scales then work one song,countdown,25
+Meditate,Get Healthier,health;mind,Focus on the breath; count to ten,countdown,10
+Read Sanskrit,Keep Learning,study;mind,One page daily; note new words in the margin,countdown,20
+Cold shower,Get Healthier,body,Two minutes; breathe slowly,stopwatch,
+Journal,,mind,"Three lines: what went well, what to fix, one gratitude",stopwatch,

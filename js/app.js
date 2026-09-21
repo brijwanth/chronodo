@@ -40,7 +40,10 @@ function watchTeamActivities() {
     if (!code) return;
     let changed = false;
     activities.forEach((remote) => {
-      const local = db.getActivities().find((a) => a.teamActivityId === remote.id);
+      const local = db.getActivities().find((a) => a.teamActivityId === remote.id)
+        || (remote.sourceActivityId
+          ? db.getActivities().find((a) => a.id === remote.sourceActivityId && !a.teamActivityId)
+          : null);
       if (!local) {
         const goalTag = remote.teamGoalId ? db.getTags().find((t) => t.teamGoalId === remote.teamGoalId) : null;
         db.createActivity({
@@ -54,9 +57,25 @@ function watchTeamActivities() {
         });
         changed = true;
       } else {
+        const goalTag = remote.teamGoalId ? db.getTags().find((t) => t.teamGoalId === remote.teamGoalId) : null;
+        const nextTags = local.tags.filter((tagId) => {
+          const tag = db.getTags().find((item) => item.id === tagId);
+          return !tag?.isGoal || !tag.teamGoalId || tag.teamGoalId === remote.teamGoalId;
+        });
+        if (goalTag && !nextTags.includes(goalTag.id)) nextTags.push(goalTag.id);
         const remoteLogs = remote.logs || {};
-        if (JSON.stringify(remoteLogs) !== JSON.stringify(local.logs || {})) {
-          db.updateActivity(local.id, { logs: remoteLogs });
+        if (local.teamActivityId !== remote.id
+            || local.teamId !== code
+            || local.teamGoalId !== (remote.teamGoalId || null)
+            || JSON.stringify(nextTags) !== JSON.stringify(local.tags)
+            || JSON.stringify(remoteLogs) !== JSON.stringify(local.logs || {})) {
+          db.updateActivity(local.id, {
+            teamId: code,
+            teamActivityId: remote.id,
+            teamGoalId: remote.teamGoalId || null,
+            tags: nextTags,
+            logs: remoteLogs,
+          });
           changed = true;
         }
       }
@@ -77,7 +96,9 @@ function watchTeamGoals() {
     goals.forEach((remote) => {
       let goalTag = db.getTags().find((t) => t.teamGoalId === remote.id);
       if (!goalTag) {
-        goalTag = db.createTag({ name: remote.name, isGoal: true, teamGoalId: remote.id });
+        goalTag = db.getGoals().find((t) => !t.teamGoalId && t.name.trim().toLowerCase() === remote.name.trim().toLowerCase());
+        if (goalTag) db.updateTag(goalTag.id, { teamGoalId: remote.id });
+        else goalTag = db.createTag({ name: remote.name, isGoal: true, teamGoalId: remote.id });
         changed = true;
       }
       db.getActivities().forEach((a) => {
@@ -254,7 +275,11 @@ function dialItems() {
     const unfinished = db.getActivities().filter(a => a.tags.includes(goal.id) && !db.isDoneOn(a, today));
     return { type: 'goal', key: 'goal:' + goal.id, name: goal.name, goal, tasks: unfinished };
   }).filter(g => g.tasks.length > 0);
-  return { pool, items: [...goalItems, ...taskItems] };
+  const goalIds = new Set(db.getGoals().map(goal => goal.id));
+  const noGoalTaskItems = tasks
+    .filter(activity => !activity.tags.some(tagId => goalIds.has(tagId)))
+    .map(activity => ({ type: 'task', key: activity.id, name: activity.name, activity }));
+  return { pool, items: [...goalItems, ...noGoalTaskItems] };
 }
 
 // Open a goal from the dial: jump straight to its only unfinished task, or
@@ -864,6 +889,128 @@ function activityGoalObjs(activity) {
   return activityTagObjs(activity).filter(t => t.isGoal);
 }
 
+function primaryGoalForActivity(activity) {
+  return activityGoalObjs(activity)[0] || null;
+}
+
+async function ensureTeamGoalForLocalGoal(goal) {
+  if (goal.teamGoalId) return goal.teamGoalId;
+  const result = await sync.createTeamGoal(goal.name);
+  db.updateTag(goal.id, { teamGoalId: result.id });
+  return result.id;
+}
+
+// Share one local activity at most once. If it was previously shared by
+// itself, assigning a goal updates that remote document rather than creating
+// another team task.
+async function shareActivityWithTeam(activity, { teamGoalId } = {}) {
+  const team = sync.getLocalTeam();
+  if (!team) throw new Error('Join a team first.');
+  const hasGoalAssignment = teamGoalId !== undefined;
+
+  if (activity.teamActivityId) {
+    if (activity.teamId && activity.teamId !== team.code) {
+      throw new Error(`"${activity.name}" is already shared with another team.`);
+    }
+    if (hasGoalAssignment && activity.teamGoalId !== teamGoalId) {
+      await sync.setTeamActivityGoal(activity.teamActivityId, teamGoalId);
+      db.updateActivity(activity.id, { teamId: team.code, teamGoalId });
+    }
+    return false;
+  }
+
+  const logsToShare = { ...activity.logs };
+  const todayKey = db.todayStr();
+  if (logsToShare[todayKey] && !logsToShare[todayKey].by) {
+    logsToShare[todayKey] = { ...logsToShare[todayKey], by: sync.getUid() };
+  }
+  const result = await sync.createTeamActivity({
+    name: activity.name,
+    timerType: activity.timerType,
+    timerDuration: activity.timerDuration,
+    logs: logsToShare,
+    teamGoalId: teamGoalId || null,
+    sourceActivityId: activity.id,
+  });
+  db.updateActivity(activity.id, {
+    teamId: result.code,
+    teamActivityId: result.id,
+    teamGoalId: teamGoalId || null,
+    logs: logsToShare,
+  });
+  return true;
+}
+
+function openTeamShareChooser(activity) {
+  const old = document.getElementById('team-share-chooser');
+  if (old) old.remove();
+  const primaryGoal = primaryGoalForActivity(activity);
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-backdrop';
+  overlay.id = 'team-share-chooser';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="sheet__head">
+        <h2 class="sheet__title">Share with team</h2>
+        <button class="sheet__close" aria-label="Close">&times;</button>
+      </div>
+      <p class="goals-intro">Choose how much to share. Existing task history is included.</p>
+      <div class="field-row" style="align-items:stretch;flex-direction:column;">
+        <button class="btn btn--ghost btn--full" data-share="task">This task only</button>
+        <button class="btn btn--ghost btn--full" data-share="goal" ${primaryGoal ? '' : 'disabled'}>This task's goal</button>
+        ${primaryGoal ? '' : '<div class="field-hint">This task has no goal.</div>'}
+        <button class="btn btn--stamp btn--full" data-share="all">Full list</button>
+      </div>
+      <p class="goals-intro" id="team-share-status" style="margin-top:12px;"></p>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  overlay.querySelector('.sheet__close').onclick = close;
+
+  const runShare = async (mode) => {
+    const buttons = [...overlay.querySelectorAll('[data-share]')];
+    buttons.forEach(button => { button.disabled = true; });
+    const status = overlay.querySelector('#team-share-status');
+    status.textContent = 'Sharing...';
+    try {
+      let sharedTasks = 0;
+      if (mode === 'task') {
+        if (await shareActivityWithTeam(activity)) sharedTasks++;
+      } else if (mode === 'goal') {
+        if (!primaryGoal) { toast('This task has no goal'); return; }
+        const teamGoalId = await ensureTeamGoalForLocalGoal(primaryGoal);
+        for (const task of db.getActivities().filter(item => item.tags.includes(primaryGoal.id))) {
+          if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
+        }
+      } else {
+        const teamGoalIds = new Map();
+        for (const goal of db.getGoals()) {
+          teamGoalIds.set(goal.id, await ensureTeamGoalForLocalGoal(goal));
+        }
+        for (const task of db.getActivities()) {
+          const goal = primaryGoalForActivity(task);
+          const teamGoalId = goal ? teamGoalIds.get(goal.id) || null : null;
+          if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
+        }
+      }
+      close();
+      closeSheet();
+      render();
+      const scope = mode === 'task' ? 'Task' : mode === 'goal' ? 'Goal' : 'Full list';
+      toast(sharedTasks ? `${scope} shared with team` : `${scope} already shared`);
+    } catch (err) {
+      status.textContent = err.message || 'Could not share with team';
+      buttons.forEach(button => { button.disabled = false; });
+      if (!primaryGoal) overlay.querySelector('[data-share="goal"]').disabled = true;
+    }
+  };
+
+  overlay.querySelector('[data-share="task"]').onclick = () => runShare('task');
+  overlay.querySelector('[data-share="goal"]').onclick = () => runShare('goal');
+  overlay.querySelector('[data-share="all"]').onclick = () => runShare('all');
+}
+
 function jumpToTagFilter(tagId) {
   viewState.activeTagFilter = tagId;
   viewState.view = 'list';
@@ -1103,13 +1250,13 @@ function closeSheet() {
 // A standalone overlay that shows generated text with Copy + Download actions.
 // Layers above any open sheet (e.g. Settings) and works even where the browser
 // blocks programmatic downloads — the user can always copy.
-const SAMPLE_CSV = `name,tags,note,timerType,timerMinutes
-Morning run,health;body,Easy 5k around the park,stopwatch,
-Guitar practice,craft;mind,Warm up with scales then work one song,countdown,25
-Meditate,health;mind,Focus on the breath; count to ten,countdown,10
-Read Sanskrit,study;mind,One page daily; note new words in the margin,countdown,20
-Cold shower,body,Two minutes; breathe slowly,stopwatch,
-Journal,mind,"Three lines: what went well, what to fix, one gratitude",stopwatch,
+const SAMPLE_CSV = `name,goal,tags,note,timerType,timerMinutes
+Morning run,Get Healthier,health;body,Easy 5k around the park,stopwatch,
+Guitar practice,Learn Guitar,craft;mind,Warm up with scales then work one song,countdown,25
+Meditate,Get Healthier,health;mind,Focus on the breath; count to ten,countdown,10
+Read Sanskrit,Keep Learning,study;mind,One page daily; note new words in the margin,countdown,20
+Cold shower,Get Healthier,body,Two minutes; breathe slowly,stopwatch,
+Journal,,mind,"Three lines: what went well, what to fix, one gratitude",stopwatch,
 `;
 
 function showTextExport(filename, text) {
@@ -1212,7 +1359,7 @@ function openDetail(activityId) {
       <div class="consistency-track"><div class="consistency-fill" id="cons-fill"></div></div>
     </div>
     <div class="card__actions" style="margin-top:18px;">
-      ${!activity.teamId && sync.getLocalTeam() ? '<button class="btn btn--ghost" id="detail-share-team" style="border-color:#067647;color:#067647;">Share with team</button>' : ''}
+      ${sync.getLocalTeam() ? '<button class="btn btn--ghost" id="detail-share-team" style="border-color:#067647;color:#067647;">Share with team</button>' : ''}
       ${activity.teamId ? '<button class="btn btn--ghost" id="detail-unshare-team">Unshare (keep for me)</button>' : ''}
       <button class="btn btn--ghost" id="detail-edit">Edit</button>
       <button class="btn btn--text" id="detail-delete" style="color:#a8432d;">Delete task</button>
@@ -1339,28 +1486,7 @@ function openDetail(activityId) {
       sheet.querySelector('#opt-cancel').onclick = closeSheet;
       const shareBtn = sheet.querySelector('#detail-share-team');
       if (shareBtn) {
-        shareBtn.onclick = async () => {
-          if (!confirm(`Share "${activity.name}" with your team? Your existing history comes along and becomes visible to everyone. Tags stay local-only for now.`)) return;
-          try {
-            const logsToShare = { ...activity.logs };
-            const todayKey = db.todayStr();
-            if (logsToShare[todayKey] && !logsToShare[todayKey].by) {
-              logsToShare[todayKey] = { ...logsToShare[todayKey], by: sync.getUid() };
-            }
-            const result = await sync.createTeamActivity({
-              name: activity.name,
-              timerType: activity.timerType,
-              timerDuration: activity.timerDuration,
-              logs: logsToShare,
-            });
-            db.updateActivity(activity.id, { teamId: result.code, teamActivityId: result.id, logs: logsToShare });
-            closeSheet();
-            render();
-            toast('Shared with team \u2014 history included');
-          } catch (err) {
-            toast(err.message || 'Could not share with team');
-          }
-        };
+        shareBtn.onclick = () => openTeamShareChooser(activity);
       }
       sheet.querySelector('#detail-edit').onclick = () => openActivityForm(activity);
       const unshareBtn = sheet.querySelector('#detail-unshare-team');
@@ -1953,7 +2079,7 @@ function openSettings() {
     </div>
     <div class="field" style="margin-top:20px;">
       <label>Import tasks from CSV</label>
-      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Columns: <b>name</b> (required), optional <b>tags</b> (semicolon-separated), <b>note</b>, <b>timerType</b> (stopwatch/countdown), <b>timerMinutes</b>. First row may be a header.</p>
+      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Columns: <b>name</b> (required), optional <b>goal</b>, <b>tags</b> (semicolon-separated), <b>note</b>, <b>timerType</b> (stopwatch/countdown), <b>timerMinutes</b>. First row may be a header.</p>
       <input type="file" id="s-csv" accept=".csv,text/csv" hidden>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
         <button class="btn btn--ghost" id="s-csv-btn">Choose CSV file</button>
@@ -2093,7 +2219,7 @@ function importTasksCsv(text) {
   let rows = parseCsv(text);
   if (!rows.length) return { added: 0, skipped: 0 };
 
-  const known = ['name', 'tags', 'note', 'timertype', 'timerminutes'];
+  const known = ['name', 'goal', 'tags', 'note', 'timertype', 'timerminutes'];
   const header = rows[0].map(h => h.trim().toLowerCase());
   const hasHeader = header.some(h => known.includes(h));
   let cols = { name: 0, tags: 1, note: 2, timertype: 3, timerminutes: 4 };
@@ -2104,23 +2230,34 @@ function importTasksCsv(text) {
   }
   const cell = (r, key) => (cols[key] != null && r[cols[key]] != null ? r[cols[key]].trim() : '');
 
-  // tag lookup by lowercased name so we reuse existing tags
+  // Keep goal and ordinary-tag lookups separate: the same display name may
+  // legitimately exist once in each category.
+  const goalByName = {};
   const tagByName = {};
-  db.getTags().forEach(t => { tagByName[t.name.toLowerCase()] = t; });
+  db.getTags().forEach(t => {
+    (t.isGoal ? goalByName : tagByName)[t.name.toLowerCase()] = t;
+  });
 
   let added = 0, skipped = 0;
   rows.forEach(r => {
     const name = cell(r, 'name');
     if (!name) { skipped++; return; }
+    const goalName = cell(r, 'goal');
+    let goalId = null;
+    if (goalName) {
+      const key = goalName.toLowerCase();
+      if (!goalByName[key]) goalByName[key] = db.createTag({ name: goalName, isGoal: true });
+      goalId = goalByName[key].id;
+    }
     const tagIds = cell(r, 'tags').split(';').map(s => s.trim()).filter(Boolean).map(tn => {
       const key = tn.toLowerCase();
-      if (!tagByName[key]) tagByName[key] = db.createTag({ name: tn });
+      if (!tagByName[key]) tagByName[key] = db.createTag({ name: tn, isGoal: false });
       return tagByName[key].id;
     });
     const type = cell(r, 'timertype').toLowerCase() === 'countdown' ? 'countdown' : 'stopwatch';
     const mins = parseInt(cell(r, 'timerminutes'), 10);
     const activity = db.createActivity({
-      name, tags: tagIds, timerType: type,
+      name, tags: goalId ? [goalId, ...tagIds] : tagIds, timerType: type,
       timerDuration: (type === 'countdown' && mins > 0) ? mins * 60 : 1500,
     });
     const note = cell(r, 'note');
@@ -2212,11 +2349,12 @@ function currentTasksCsv() {
     v = String(v == null ? '' : v);
     return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
   };
-  const rows = ['name,tags,note,timerType,timerMinutes'];
+  const rows = ['name,goal,tags,note,timerType,timerMinutes'];
   db.getActivities().forEach(a => {
-    const tags = activityTagObjs(a).map(t => t.name).join(';');
+    const goal = primaryGoalForActivity(a);
+    const tags = activityTagObjs(a).filter(t => !t.isGoal).map(t => t.name).join(';');
     const mins = a.timerType === 'countdown' ? Math.round((a.timerDuration || 0) / 60) : '';
-    rows.push([esc(a.name), esc(tags), esc(a.note || ''), esc(a.timerType || 'stopwatch'), esc(mins)].join(','));
+    rows.push([esc(a.name), esc(goal ? goal.name : ''), esc(tags), esc(a.note || ''), esc(a.timerType || 'stopwatch'), esc(mins)].join(','));
   });
   return rows.join('\n') + '\n';
 }

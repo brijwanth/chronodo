@@ -37,13 +37,15 @@ loading (a legacy task with several goal-tags shows its first as primary and
 collapses to that one only if you re-save it). Team goals continue to mirror in
 as goal-tags with a `teamGoalId`.
 
-**Goals on the dial.** The Chronodo dial shows individual tasks *and* goals
-that still have unfinished tasks today. Goals are derived UI objects (from goal
-tags + activities) — never stored as activities. Opening a goal jumps straight
-to its one remaining task, or shows a small picker when several remain, where
-you stamp or time a child task. The goal itself is never stamped; it drops off
-the dial once all its tasks are stamped for the day, just like a finished task.
-The **No goal** bucket is not a dial item.
+**Goals on the dial.** In the unfiltered **All** view, the Chronodo dial focuses
+on goals that still have unfinished tasks today plus unfinished tasks that have
+no goal. Tasks already filed under a goal do not also appear as separate dial
+items. Goals are derived UI objects (from goal tags + activities) — never stored
+as activities. Opening a goal jumps straight to its one remaining task, or shows
+a small picker when several remain, where you stamp or time a child task. The
+goal itself is never stamped; it drops off the dial once all its tasks are
+stamped for the day. Goal and tag filters continue to show matching individual
+tasks.
 
 ## Stamping past dates
 

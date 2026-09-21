@@ -130,6 +130,7 @@ function updateTag(tagId, patch) {
   if (!tag) return null;
   if (patch.name !== undefined) tag.name = patch.name.trim();
   if (patch.isGoal !== undefined) tag.isGoal = patch.isGoal;
+  if (patch.teamGoalId !== undefined) tag.teamGoalId = patch.teamGoalId;
   save();
   return tag;
 }
