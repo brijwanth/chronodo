@@ -26,8 +26,8 @@ let viewState = {
            : db.getSettings().recommendationPref === 'untouched' ? 'untouched' : 'balanced',
 };
 
-// Unsubscribe handle for the live team-membership listener (Settings sheet).
-// closeSheet() always tears this down, whichever way a sheet closes.
+// Unsubscribe handle for the live team-membership listener while the Teams
+// view is open. render() tears it down before changing or rebuilding views.
 let teamUnsub = null;
 
 // Unsubscribe handle for the live team-activities listener. Unlike
@@ -187,7 +187,7 @@ topUpMore();
 const navPanel = document.getElementById('nav-panel');
 const navScrim = document.getElementById('nav-scrim');
 const btnMenu = document.getElementById('btn-menu');
-const viewLabels = { rolodex: 'Chronodo', list: 'List', calendar: 'Calendar', tags: 'Goals & Tags', recommend: 'Suggested' };
+const viewLabels = { rolodex: 'Chronodo', list: 'List', calendar: 'Calendar', tags: 'Goals & Tags', team: 'Teams', recommend: 'Suggested' };
 
 function openMenu() {
   navPanel.classList.add('is-open');
@@ -225,11 +225,14 @@ document.getElementById('btn-settings').addEventListener('click', () => openSett
 
 // ---------------------------------------------------------------- render dispatch
 function render() {
+  if (teamUnsub) { teamUnsub(); teamUnsub = null; }
   mainEl.innerHTML = '';
+  document.getElementById('btn-add').hidden = viewState.view === 'team';
   if (viewState.view === 'rolodex') renderRolodex();
   else if (viewState.view === 'list') renderList();
   else if (viewState.view === 'calendar') renderCalendarView();
   else if (viewState.view === 'tags') renderTags();
+  else if (viewState.view === 'team') renderTeam();
   else if (viewState.view === 'recommend') renderRecommend();
 }
 
@@ -1244,7 +1247,6 @@ function openSheet(innerHTML, { onMount, fullscreen } = {}) {
 function closeSheet() {
   const el = document.getElementById('active-sheet');
   if (el) el.remove();
-  if (teamUnsub) { teamUnsub(); teamUnsub = null; }
 }
 
 // A standalone overlay that shows generated text with Copy + Download actions.
@@ -1774,12 +1776,23 @@ function openTagForm({ isGoal = false, existing = null } = {}) {
   });
 }
 
-// ---------------------------------------------------------------- team sync panel (Settings)
+// ---------------------------------------------------------------- teams view
 // Renders either the create/join buttons or the joined-team info, and keeps
-// membership live via sync.subscribeToTeam while the Settings sheet is open.
-// closeSheet() (above) always tears the listener down, however the sheet closes.
+// membership live via sync.subscribeToTeam while the Teams view is open.
 // The name field is always shown (even before joining) so it's set before
 // you create/join; the body below it swaps between join/joined states.
+function renderTeam() {
+  const intro = document.createElement('p');
+  intro.className = 'goals-intro';
+  intro.textContent = 'Share tasks and goals with a small team. Stamps sync in real time for everyone using the same team code.';
+  mainEl.appendChild(intro);
+
+  const panel = document.createElement('section');
+  panel.className = 'team-view';
+  mainEl.appendChild(panel);
+  mountTeamPanel(panel);
+}
+
 function mountTeamPanel(container) {
   container.innerHTML = `
     <div class="field" style="margin-bottom:14px;">
@@ -2034,11 +2047,6 @@ function openSettings() {
       </div>
     </div>
     <div class="field" style="margin-top:20px;">
-      <label>Team sync (beta)</label>
-      <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">Share select tasks and goals with a small team. Stamps sync in real time.</p>
-      <div id="team-panel"></div>
-    </div>
-    <div class="field" style="margin-top:20px;">
       <label>Reminders</label>
       <p style="font-size:11px;opacity:.6;margin:2px 0 10px;line-height:1.6;">A nudge to come back and stamp your day. Runs on this device from your own data — shown when you open Chronodo.</p>
       <div class="switch-row">
@@ -2126,7 +2134,6 @@ function openSettings() {
         r.onchange = () => { db.updateSettings({ recommendationPref: r.value }); viewState.recoMode = r.value; };
       });
       mountReminderPanel(sheet);
-      mountTeamPanel(sheet.querySelector('#team-panel'));
       const csvInput = sheet.querySelector('#s-csv');
       const csvStatus = sheet.querySelector('#s-csv-status');
       sheet.querySelector('#s-csv-btn').onclick = () => csvInput.click();

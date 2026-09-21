@@ -37,6 +37,10 @@ loading (a legacy task with several goal-tags shows its first as primary and
 collapses to that one only if you re-save it). Team goals continue to mirror in
 as goal-tags with a `teamGoalId`.
 
+The **Teams** view is the home for creating or joining a team, setting your
+teammate name, copying the team code, reviewing members, and adding team goals.
+Team controls are kept separate from device preferences in Settings.
+
 **Goals on the dial.** In the unfiltered **All** view, the Chronodo dial focuses
 on goals that still have unfinished tasks today plus unfinished tasks that have
 no goal. Tasks already filed under a goal do not also appear as separate dial
