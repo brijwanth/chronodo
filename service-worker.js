@@ -1,4 +1,4 @@
-const CACHE = 'rolodex-v22';
+const CACHE = 'rolodex-v23';
 const CORE_ASSETS = [
   './',
   './index.html',

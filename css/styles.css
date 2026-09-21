@@ -1133,7 +1133,7 @@ button { font-family: inherit; }
 .rolo-card--current .card__stats { display: none !important; }
 .rolo-card--current .card__actions { margin-top: 12px; }
 
-/* ===== Team sync (Settings) ===== */
+/* ===== Teams view ===== */
 .team-code {
   display: flex;
   align-items: center;
@@ -1152,6 +1152,10 @@ button { font-family: inherit; }
 .team-member { font-size: 12.5px; opacity: 0.85; padding: 3px 0; }
 .team-goal-list { margin-top: 10px; }
 .team-goal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 13px;
   font-weight: 600;
   padding: 8px 11px;
@@ -1160,3 +1164,4 @@ button { font-family: inherit; }
   border-radius: var(--radius-sm);
   margin-bottom: 6px;
 }
+.team-goal-row .btn { flex: 0 0 auto; margin-left: auto; }

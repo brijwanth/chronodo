@@ -39,7 +39,11 @@ as goal-tags with a `teamGoalId`.
 
 The **Teams** view is the home for creating or joining a team, setting your
 teammate name, copying the team code, reviewing members, and adding team goals.
-Team controls are kept separate from device preferences in Settings.
+Team controls are kept separate from device preferences in Settings. Existing
+goals or the full local list can be shared from this view without duplicating
+team records. Shared task definitions, notes, schedules, goal assignments,
+history, and goal names update for every teammate, so each member can add and
+edit the team's work.
 
 **Goals on the dial.** In the unfiltered **All** view, the Chronodo dial focuses
 on goals that still have unfinished tasks today plus unfinished tasks that have

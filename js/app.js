@@ -46,15 +46,18 @@ function watchTeamActivities() {
           : null);
       if (!local) {
         const goalTag = remote.teamGoalId ? db.getTags().find((t) => t.teamGoalId === remote.teamGoalId) : null;
-        db.createActivity({
+        const created = db.createActivity({
           name: remote.name,
           timerType: remote.timerType || 'stopwatch',
           timerDuration: remote.timerDuration || 1500,
+          timesPerWeek: remote.timesPerWeek || 7,
+          preferredDays: remote.preferredDays || [0, 1, 2, 3, 4, 5, 6],
           teamId: code,
           teamActivityId: remote.id,
           teamGoalId: remote.teamGoalId || null,
           tags: goalTag ? [goalTag.id] : [],
         });
+        if (remote.note) db.updateActivity(created.id, { note: remote.note });
         changed = true;
       } else {
         const goalTag = remote.teamGoalId ? db.getTags().find((t) => t.teamGoalId === remote.teamGoalId) : null;
@@ -64,10 +67,23 @@ function watchTeamActivities() {
         });
         if (goalTag && !nextTags.includes(goalTag.id)) nextTags.push(goalTag.id);
         const remoteLogs = remote.logs || {};
+        const remoteName = remote.name || local.name;
+        const remoteTimerType = remote.timerType || local.timerType || 'stopwatch';
+        const remoteTimerDuration = remote.timerDuration || local.timerDuration || 1500;
+        const remoteNote = remote.note !== undefined ? remote.note : (local.note || '');
+        const remoteTimesPerWeek = remote.timesPerWeek || local.timesPerWeek || 7;
+        const remotePreferredDays = Array.isArray(remote.preferredDays) ? remote.preferredDays : (local.preferredDays || [0, 1, 2, 3, 4, 5, 6]);
+        const definitionChanged = local.name !== remoteName
+          || local.timerType !== remoteTimerType
+          || local.timerDuration !== remoteTimerDuration
+          || (local.note || '') !== remoteNote
+          || local.timesPerWeek !== remoteTimesPerWeek
+          || JSON.stringify(local.preferredDays || []) !== JSON.stringify(remotePreferredDays);
         if (local.teamActivityId !== remote.id
             || local.teamId !== code
             || local.teamGoalId !== (remote.teamGoalId || null)
             || JSON.stringify(nextTags) !== JSON.stringify(local.tags)
+            || definitionChanged
             || JSON.stringify(remoteLogs) !== JSON.stringify(local.logs || {})) {
           db.updateActivity(local.id, {
             teamId: code,
@@ -75,6 +91,12 @@ function watchTeamActivities() {
             teamGoalId: remote.teamGoalId || null,
             tags: nextTags,
             logs: remoteLogs,
+            name: remoteName,
+            timerType: remoteTimerType,
+            timerDuration: remoteTimerDuration,
+            note: remoteNote,
+            timesPerWeek: remoteTimesPerWeek,
+            preferredDays: remotePreferredDays,
           });
           changed = true;
         }
@@ -99,6 +121,9 @@ function watchTeamGoals() {
         goalTag = db.getGoals().find((t) => !t.teamGoalId && t.name.trim().toLowerCase() === remote.name.trim().toLowerCase());
         if (goalTag) db.updateTag(goalTag.id, { teamGoalId: remote.id });
         else goalTag = db.createTag({ name: remote.name, isGoal: true, teamGoalId: remote.id });
+        changed = true;
+      } else if (goalTag.name !== remote.name) {
+        db.updateTag(goalTag.id, { name: remote.name });
         changed = true;
       }
       db.getActivities().forEach((a) => {
@@ -915,10 +940,20 @@ async function shareActivityWithTeam(activity, { teamGoalId } = {}) {
     if (activity.teamId && activity.teamId !== team.code) {
       throw new Error(`"${activity.name}" is already shared with another team.`);
     }
-    if (hasGoalAssignment && activity.teamGoalId !== teamGoalId) {
-      await sync.setTeamActivityGoal(activity.teamActivityId, teamGoalId);
-      db.updateActivity(activity.id, { teamId: team.code, teamGoalId });
-    }
+    const patch = {
+      name: activity.name,
+      timerType: activity.timerType,
+      timerDuration: activity.timerDuration,
+      note: activity.note || '',
+      timesPerWeek: activity.timesPerWeek || 7,
+      preferredDays: activity.preferredDays || [0, 1, 2, 3, 4, 5, 6],
+    };
+    if (hasGoalAssignment) patch.teamGoalId = teamGoalId;
+    await sync.updateTeamActivity(activity.teamActivityId, patch);
+    db.updateActivity(activity.id, {
+      teamId: team.code,
+      ...(hasGoalAssignment ? { teamGoalId } : {}),
+    });
     return false;
   }
 
@@ -934,6 +969,9 @@ async function shareActivityWithTeam(activity, { teamGoalId } = {}) {
     logs: logsToShare,
     teamGoalId: teamGoalId || null,
     sourceActivityId: activity.id,
+    note: activity.note || '',
+    timesPerWeek: activity.timesPerWeek || 7,
+    preferredDays: activity.preferredDays || [0, 1, 2, 3, 4, 5, 6],
   });
   db.updateActivity(activity.id, {
     teamId: result.code,
@@ -942,6 +980,29 @@ async function shareActivityWithTeam(activity, { teamGoalId } = {}) {
     logs: logsToShare,
   });
   return true;
+}
+
+async function shareGoalWithTeam(goal) {
+  const teamGoalId = await ensureTeamGoalForLocalGoal(goal);
+  let sharedTasks = 0;
+  for (const task of db.getActivities().filter(item => item.tags.includes(goal.id))) {
+    if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
+  }
+  return sharedTasks;
+}
+
+async function shareFullListWithTeam() {
+  const teamGoalIds = new Map();
+  for (const goal of db.getGoals()) {
+    teamGoalIds.set(goal.id, await ensureTeamGoalForLocalGoal(goal));
+  }
+  let sharedTasks = 0;
+  for (const task of db.getActivities()) {
+    const goal = primaryGoalForActivity(task);
+    const teamGoalId = goal ? teamGoalIds.get(goal.id) || null : null;
+    if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
+  }
+  return sharedTasks;
 }
 
 function openTeamShareChooser(activity) {
@@ -982,20 +1043,9 @@ function openTeamShareChooser(activity) {
         if (await shareActivityWithTeam(activity)) sharedTasks++;
       } else if (mode === 'goal') {
         if (!primaryGoal) { toast('This task has no goal'); return; }
-        const teamGoalId = await ensureTeamGoalForLocalGoal(primaryGoal);
-        for (const task of db.getActivities().filter(item => item.tags.includes(primaryGoal.id))) {
-          if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
-        }
+        sharedTasks = await shareGoalWithTeam(primaryGoal);
       } else {
-        const teamGoalIds = new Map();
-        for (const goal of db.getGoals()) {
-          teamGoalIds.set(goal.id, await ensureTeamGoalForLocalGoal(goal));
-        }
-        for (const task of db.getActivities()) {
-          const goal = primaryGoalForActivity(task);
-          const teamGoalId = goal ? teamGoalIds.get(goal.id) || null : null;
-          if (await shareActivityWithTeam(task, { teamGoalId })) sharedTasks++;
-        }
+        sharedTasks = await shareFullListWithTeam();
       }
       close();
       closeSheet();
@@ -1382,11 +1432,15 @@ function openDetail(activityId) {
       // Persistent task note (method / how-to) — saves on blur.
       const taskNote = sheet.querySelector('#task-note-input');
       taskNote.value = activity.note || '';
-      taskNote.addEventListener('blur', () => {
+      taskNote.addEventListener('blur', async () => {
         const val = taskNote.value.trim();
         if (val !== (activity.note || '')) {
           db.updateActivity(activity.id, { note: val });
           activity.note = val;
+          if (activity.teamActivityId) {
+            try { await sync.updateTeamActivity(activity.teamActivityId, { note: val }); }
+            catch (err) { toast(err.message || 'Note saved locally but could not sync'); }
+          }
         }
       });
 
@@ -1524,7 +1578,7 @@ function openDetail(activityId) {
 // ---------------------------------------------------------------- add/edit activity form
 // presetGoalId (optional): preselect a goal when creating a new task from the
 // Goals & Tags view's "New task in this goal" quick action.
-function openActivityForm(existing = null, { presetGoalId = null } = {}) {
+function openActivityForm(existing = null, { presetGoalId = null, shareWithTeam = false } = {}) {
   // A task carries at most one primary goal plus any number of plain tags,
   // all stored together in activity.tags. Split the existing membership into
   // the single primary goal (first goal-tag found) and the plain tag set.
@@ -1585,9 +1639,9 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
     ${!existing && sync.getLocalTeam() ? `
     <div class="switch-row">
       <div><div>Share with team</div><div style="font-size:11px;opacity:.6;">Everyone in your team will see this card, and stamping it marks it done for the whole team. Tags and schedule stay local for now.</div></div>
-      <label class="switch"><input type="checkbox" id="f-team-share"><span class="switch__track"></span></label>
+      <label class="switch"><input type="checkbox" id="f-team-share" ${shareWithTeam ? 'checked' : ''}><span class="switch__track"></span></label>
     </div>
-    <div class="field" id="f-team-goal-field" style="display:none;margin-top:10px;">
+    <div class="field" id="f-team-goal-field" style="${shareWithTeam ? '' : 'display:none;'}margin-top:10px;">
       <label>Team goal (optional)</label>
       <select id="f-team-goal">
         <option value="">None</option>
@@ -1695,20 +1749,6 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
         if (!name) { toast('Give it a name first'); return; }
         const timerType = sheet.querySelector('input[name="f-timertype"]:checked').value;
         const minutes = parseInt(sheet.querySelector('#f-duration').value, 10) || 15;
-        const shareEl = sheet.querySelector('#f-team-share');
-        if (shareEl && shareEl.checked) {
-          const goalEl = sheet.querySelector('#f-team-goal');
-          const teamGoalId = (goalEl && goalEl.value) || null;
-          try {
-            await sync.createTeamActivity({ name, timerType, timerDuration: minutes * 60, teamGoalId });
-          } catch (err) {
-            toast(err.message || 'Could not share with team');
-            return;
-          }
-          closeSheet();
-          toast('Shared with team \u2014 appears on every device in a moment');
-          return;
-        }
         const payload = {
           name,
           tags: [...(primaryGoal ? [primaryGoal] : []), ...selectedTags],
@@ -1717,6 +1757,40 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
           timesPerWeek: Math.max(1, Math.min(7, parseInt(sheet.querySelector('#f-perweek').value, 10) || 7)),
           preferredDays: Array.from(selectedDays).sort((a, b) => a - b),
         };
+        const shareEl = sheet.querySelector('#f-team-share');
+        if (shareEl && shareEl.checked) {
+          const goalEl = sheet.querySelector('#f-team-goal');
+          let teamGoalId = (goalEl && goalEl.value) || null;
+          try {
+            const selectedGoal = primaryGoal ? db.getTags().find((tag) => tag.id === primaryGoal) : null;
+            if (selectedGoal) teamGoalId = await ensureTeamGoalForLocalGoal(selectedGoal);
+            await sync.createTeamActivity({ ...payload, teamGoalId });
+          } catch (err) {
+            toast(err.message || 'Could not share with team');
+            return;
+          }
+          closeSheet();
+          toast('Shared with team \u2014 appears on every device in a moment');
+          return;
+        }
+        if (existing && existing.teamActivityId) {
+          try {
+            const selectedGoal = primaryGoal ? db.getTags().find((tag) => tag.id === primaryGoal) : null;
+            const teamGoalId = selectedGoal ? await ensureTeamGoalForLocalGoal(selectedGoal) : null;
+            await sync.updateTeamActivity(existing.teamActivityId, {
+              name: payload.name,
+              timerType: payload.timerType,
+              timerDuration: payload.timerDuration,
+              timesPerWeek: payload.timesPerWeek,
+              preferredDays: payload.preferredDays,
+              teamGoalId,
+            });
+            payload.teamGoalId = teamGoalId;
+          } catch (err) {
+            toast(err.message || 'Could not update team task');
+            return;
+          }
+        }
         if (existing) db.updateActivity(existing.id, payload);
         else db.createActivity(payload);
         closeSheet();
@@ -1730,6 +1804,7 @@ function openActivityForm(existing = null, { presetGoalId = null } = {}) {
 function openTagForm({ isGoal = false, existing = null } = {}) {
   const editing = !!existing;
   const goal = editing ? existing.isGoal : isGoal;
+  const sharedGoal = !!(editing && existing.teamGoalId);
   const kind = goal ? 'goal' : 'tag';
   openSheet(`
     <div class="sheet__head">
@@ -1740,29 +1815,34 @@ function openTagForm({ isGoal = false, existing = null } = {}) {
       <label>${goal ? 'Goal' : 'Tag'} name</label>
       <input type="text" id="tg-name" placeholder="${goal ? 'e.g. Run a 10K' : 'e.g. morning'}" value="${editing ? existing.name.replace(/"/g,'&quot;') : ''}">
     </div>
-    <div class="field">
+    ${sharedGoal ? '' : '<div class="field">'}
+    ${sharedGoal ? '' : `
       <label>Type</label>
       <div class="radio-row">
         <label><input type="radio" name="tg-type" value="tag" ${goal ? '' : 'checked'}> Tag</label>
         <label><input type="radio" name="tg-type" value="goal" ${goal ? 'checked' : ''}> Goal</label>
       </div>
-    </div>
+    </div>`}
     <button class="btn btn--primary btn--full" id="tg-save">${editing ? 'Save changes' : 'Save'}</button>
-    ${editing ? '<button class="btn btn--text btn--full" id="tg-delete" style="color:#a8432d;margin-top:8px;">Delete</button>' : ''}
+    ${editing && !sharedGoal ? '<button class="btn btn--text btn--full" id="tg-delete" style="color:#a8432d;margin-top:8px;">Delete</button>' : ''}
   `, {
     onMount: (sheet) => {
       sheet.querySelector('.sheet__close').onclick = closeSheet;
-      sheet.querySelector('#tg-save').onclick = () => {
+      sheet.querySelector('#tg-save').onclick = async () => {
         const name = sheet.querySelector('#tg-name').value.trim();
         if (!name) return;
-        const asGoal = sheet.querySelector('input[name="tg-type"]:checked').value === 'goal';
+        const asGoal = sharedGoal || sheet.querySelector('input[name="tg-type"]:checked').value === 'goal';
+        if (sharedGoal) {
+          try { await sync.updateTeamGoal(existing.teamGoalId, name); }
+          catch (err) { toast(err.message || 'Could not update team goal'); return; }
+        }
         if (editing) { db.updateTag(existing.id, { name, isGoal: asGoal }); }
         else { db.createTag({ name, isGoal: asGoal }); }
         closeSheet();
         render();
         toast(editing ? 'Saved' : (asGoal ? 'Goal' : 'Tag') + ' added');
       };
-      if (editing) {
+      if (editing && !sharedGoal) {
         sheet.querySelector('#tg-delete').onclick = () => {
           if (confirm(`Delete "${existing.name}"? It will be removed from all cards.`)) {
             db.deleteTag(existing.id);
@@ -1817,7 +1897,9 @@ function mountTeamPanel(container) {
       return `<div class="team-member">${label}</div>`;
     }).join('');
     const teamGoals = db.getTags().filter((t) => t.teamGoalId);
-    const goalRows = teamGoals.map((g) => `<div class="team-goal-row">${g.name}</div>`).join('');
+    const goalRows = teamGoals.map((g) => `<div class="team-goal-row"><span>${g.name.replace(/</g, '&lt;')}</span><button class="btn btn--text btn--sm" data-team-goal-edit="${g.id}">Edit</button></div>`).join('');
+    const localGoals = db.getGoals();
+    const localGoalOptions = localGoals.map((g) => `<option value="${g.id}">${g.name.replace(/</g, '&lt;')}${g.teamGoalId ? ' (shared)' : ''}</option>`).join('');
     body.innerHTML = `
       <div class="team-code">
         <div>
@@ -1828,8 +1910,19 @@ function mountTeamPanel(container) {
       </div>
       <div class="team-status">${info.memberCount == null ? 'Syncing\u2026' : info.memberCount + (info.memberCount === 1 ? ' person synced' : ' people synced')} \u00b7 ${sharedCount} shared card${sharedCount === 1 ? '' : 's'}</div>
       <div class="team-member-list">${memberRows}</div>
+      <button class="btn btn--primary btn--full" id="team-new-task" style="margin-top:16px;">New team task</button>
+      <div class="section-title" style="margin:18px 0 8px;">Share existing work</div>
+      <p style="font-size:11px;opacity:.6;margin:-4px 0 10px;line-height:1.5;">Sharing a goal includes every task filed under it and its existing history.</p>
+      <div class="field-row">
+        <select id="team-local-goal" style="flex:1;" ${localGoals.length ? '' : 'disabled'}>
+          ${localGoalOptions || '<option>No local goals</option>'}
+        </select>
+        <button class="btn btn--ghost" id="team-share-goal" ${localGoals.length ? '' : 'disabled'}>Share goal</button>
+      </div>
+      <button class="btn btn--stamp btn--full" id="team-share-all" style="margin-top:10px;">Share all goals &amp; tasks</button>
+      <div class="team-status" id="team-share-work-status"></div>
       <div class="section-title" style="margin:16px 0 8px;">Team goals</div>
-      <p style="font-size:11px;opacity:.6;margin:-4px 0 10px;line-height:1.5;">Groups shared cards, the same way personal goals group your own. Assign a card to one when sharing it.</p>
+      <p style="font-size:11px;opacity:.6;margin:-4px 0 10px;line-height:1.5;">Everyone can add goals here or edit a shared goal below.</p>
       <div class="field-row">
         <input type="text" id="team-goal-input" placeholder="e.g. Get Fit Together" style="flex:1;background:var(--color-bg);border:1px solid var(--color-brass-dark);color:var(--color-cream);border-radius:7px;padding:10px 11px;font-family:var(--font-mono);font-size:13.5px;">
         <button class="btn btn--ghost" id="team-goal-add" style="border-color:#067647;color:#067647;">Add</button>
@@ -1841,6 +1934,30 @@ function mountTeamPanel(container) {
       try { await navigator.clipboard.writeText(info.code); toast('Code copied'); }
       catch (e) { toast('Could not copy \u2014 code is ' + info.code); }
     };
+    body.querySelector('#team-new-task').onclick = () => openActivityForm(null, { shareWithTeam: true });
+    const shareStatus = body.querySelector('#team-share-work-status');
+    const shareGoalBtn = body.querySelector('#team-share-goal');
+    const shareAllBtn = body.querySelector('#team-share-all');
+    const runShare = async (action, successMessage) => {
+      shareGoalBtn.disabled = true;
+      shareAllBtn.disabled = true;
+      shareStatus.textContent = 'Sharing...';
+      try {
+        await action();
+        toast(successMessage);
+        mountTeamPanel(container);
+      } catch (err) {
+        shareStatus.style.color = '#a8432d';
+        shareStatus.textContent = err.message || 'Could not share with team';
+        shareGoalBtn.disabled = !localGoals.length;
+        shareAllBtn.disabled = false;
+      }
+    };
+    shareGoalBtn.onclick = () => {
+      const goal = db.getTags().find((tag) => tag.id === body.querySelector('#team-local-goal').value);
+      if (goal) runShare(() => shareGoalWithTeam(goal), 'Goal and tasks shared');
+    };
+    shareAllBtn.onclick = () => runShare(shareFullListWithTeam, 'All goals and tasks shared');
     body.querySelector('#team-goal-add').onclick = async () => {
       const goalInput = body.querySelector('#team-goal-input');
       const name = goalInput.value.trim();
@@ -1853,6 +1970,12 @@ function mountTeamPanel(container) {
         toast(err.message || 'Could not add team goal');
       }
     };
+    body.querySelectorAll('[data-team-goal-edit]').forEach((button) => {
+      button.onclick = () => {
+        const goal = db.getTags().find((tag) => tag.id === button.dataset.teamGoalEdit);
+        if (goal) openTagForm({ existing: goal });
+      };
+    });
     body.querySelector('#team-leave').onclick = async () => {
       if (!confirm('Leave this team? You can rejoin later with the code.')) return;
       await sync.leaveTeam();
